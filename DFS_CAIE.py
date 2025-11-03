@@ -1,8 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from scipy.optimize import linprog
-import io
+import pulp  # Import the MILP solver library
 import math
 
 # Set page configuration
@@ -26,7 +25,6 @@ st.markdown("""
     --border-radius: 12px;
     --shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
 }
-
 .main-header {
     font-size: 2.8rem;
     color: var(--primary);
@@ -38,7 +36,6 @@ st.markdown("""
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
 }
-
 .section-header {
     font-size: 1.6rem;
     color: var(--primary);
@@ -47,7 +44,6 @@ st.markdown("""
     margin: 2rem 0 1.5rem 0;
     font-weight: 600;
 }
-
 .panel {
     background-color: var(--card-bg);
     border-radius: var(--border-radius);
@@ -57,12 +53,10 @@ st.markdown("""
     border: 1px solid #e0e0e0;
     transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
-
 .panel:hover {
     transform: translateY(-3px);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
-
 .stButton>button {
     background: linear-gradient(135deg, var(--primary), var(--secondary));
     color: white;
@@ -75,13 +69,11 @@ st.markdown("""
     width: 100%;
     margin-top: 1rem;
 }
-
 .stButton>button:hover {
     transform: translateY(-2px);
     box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
     background: linear-gradient(135deg, var(--secondary), var(--primary));
 }
-
 .instruction-box {
     background-color: #f0f7ff;
     border-left: 4px solid var(--primary);
@@ -90,7 +82,6 @@ st.markdown("""
     margin: 1rem 0;
     font-size: 0.95rem;
 }
-
 .success-box {
     background-color: #f0fff4;
     border-left: 4px solid var(--secondary);
@@ -98,7 +89,6 @@ st.markdown("""
     border-radius: 4px;
     margin: 1rem 0;
 }
-
 .warning-box {
     background-color: #fffaf0;
     border-left: 4px solid #ffb347;
@@ -106,7 +96,6 @@ st.markdown("""
     border-radius: 4px;
     margin: 1rem 0;
 }
-
 .error-box {
     background-color: #fff5f5;
     border-left: 4px solid #ff6b6b;
@@ -114,12 +103,10 @@ st.markdown("""
     border-radius: 4px;
     margin: 1rem 0;
 }
-
 .logo-container {
     text-align: center;
     margin-bottom: 1.5rem;
 }
-
 .logo {
     font-size: 3rem;
     margin-bottom: 0.5rem;
@@ -225,7 +212,7 @@ def dfs_consistency_index(dfs):
     P_c, P_d = dfs['P']
     
     numerator = ((O_a - P_d) ** 2 + (O_b - P_c) ** 2 + 
-                (1 - O_a - O_b) ** 2 + (1 - P_c - P_d) ** 2)
+                 (1 - O_a - O_b) ** 2 + (1 - P_c - P_d) ** 2)
     
     CI = 1 - math.sqrt(numerator / 2)
     return max(0, min(1, CI))  # Ensure between 0 and 1
@@ -250,8 +237,12 @@ def ml_expert_weighting(expert_data, cov_matrix=None):
     # If covariance matrix is not provided, compute it from data
     if cov_matrix is None:
         # Normalize the data
-        expert_data_normalized = (expert_data - np.max(expert_data, axis=0)) / (
-            np.max(expert_data, axis=0) - np.min(expert_data, axis=0))
+        min_vals = np.min(expert_data, axis=0)
+        max_vals = np.max(expert_data, axis=0)
+        range_vals = max_vals - min_vals
+        # Avoid division by zero if a feature is constant
+        range_vals[range_vals == 0] = 1
+        expert_data_normalized = (expert_data - max_vals) / range_vals
         cov_matrix = np.cov(expert_data_normalized.T)
     
     # Eigen decomposition
@@ -259,7 +250,7 @@ def ml_expert_weighting(expert_data, cov_matrix=None):
     
     # Select eigenvector corresponding to the maximum eigenvalue
     max_index = np.argmax(eigenvalues)
-    principal_eigenvector = eigenvectors[:, max_index]
+    principal_eigenvector = eigenvectors[:, max_index].real # Use real part
     
     # Sort eigenvector components in descending order
     sorted_eigenvector = np.sort(principal_eigenvector)[::-1]
@@ -268,9 +259,18 @@ def ml_expert_weighting(expert_data, cov_matrix=None):
     lambda_values = expert_data @ sorted_eigenvector
     
     # Normalize to get expert weights
-    weights = lambda_values / np.sum(lambda_values)
-    
-    return weights, eigenvalues[max_index], sorted_eigenvector, lambda_values
+    # Handle negative lambda values if they occur, e.g., by shifting
+    if np.any(lambda_values < 0):
+        lambda_values = lambda_values - np.min(lambda_values) 
+        
+    sum_lambda = np.sum(lambda_values)
+    if sum_lambda == 0:
+         # All experts are equal if sum is zero
+        weights = np.ones(len(lambda_values)) / len(lambda_values)
+    else:
+        weights = lambda_values / sum_lambda
+        
+    return weights, eigenvalues[max_index].real, sorted_eigenvector, lambda_values
 
 # ==================== DFS-AHP MODEL ====================
 
@@ -303,17 +303,41 @@ def compute_dfs_ahp_weights(aggregated_matrix):
     for i in range(1, n):
         sum_geometric_means = dfs_addition(sum_geometric_means, geometric_means[i])
     
+    # Calculate reciprocal of the sum
+    # (1/O_a, 1/O_b) and (1/P_c, 1/P_d) are not standard DFS numbers.
+    # We should perform division, which is complex.
+    # A simpler approach (often used) is to defuzzify the GMs, sum them, and normalize.
+    # But sticking to the paper's fuzzy ops: We need a fuzzy reciprocal.
+    # Let's assume a simplified reciprocal for normalization
+    
+    sum_O_a, sum_O_b = sum_geometric_means['O']
+    sum_P_c, sum_P_d = sum_geometric_means['P']
+
+    # Simplified reciprocal (this is an approximation, real fuzzy division is complex)
+    reciprocal_sum = {
+        'O': (1/sum_O_a if sum_O_a != 0 else 0, 1/sum_O_b if sum_O_b != 0 else 0),
+        'P': (1/sum_P_c if sum_P_c != 0 else 0, 1/sum_P_d if sum_P_d != 0 else 0)
+    }
+
     # Normalize weights
     weights = []
     for i in range(n):
-        weight = dfs_multiplication(geometric_means[i], 
-                                  {'O': (1/sum_geometric_means['O'][0] if sum_geometric_means['O'][0] != 0 else 0, 
-                                         1/sum_geometric_means['O'][1] if sum_geometric_means['O'][1] != 0 else 0),
-                                   'P': (1/sum_geometric_means['P'][0] if sum_geometric_means['P'][0] != 0 else 0,
-                                         1/sum_geometric_means['P'][1] if sum_geometric_means['P'][1] != 0 else 0)})
-        weights.append(weight)
+        # This multiplication might produce invalid DFS numbers if reciprocal isn't handled carefully.
+        # Let's use the defuzzified-then-normalized approach for stability, as fuzzy-AHP normalization is tricky.
+        pass # Will do defuzzified approach below
+
+    # Alternative: Defuzzify geometric means and normalize (more stable)
+    defuzzified_gms = [dfs_defuzzification(gm) for gm in geometric_means]
+    sum_defuzzified_gms = sum(defuzzified_gms)
     
-    return weights
+    if sum_defuzzified_gms == 0:
+        normalized_weights_crisp = [1/n] * n
+    else:
+        normalized_weights_crisp = [gm / sum_defuzzified_gms for gm in defuzzified_gms]
+
+    # Return both the fuzzy GMs (as 'weights') and the crisp normalized weights
+    return geometric_means, normalized_weights_crisp
+
 
 # ==================== DFS-QFD MODEL ====================
 
@@ -331,76 +355,95 @@ def dfs_qfd_relationship_matrix(relationships, expert_weights):
     
     return aggregated_matrix
 
-def compute_dfs_qfd_scores(rc_weights, relationship_matrix):
+def compute_dfs_qfd_scores(rc_weights_dfs, relationship_matrix):
     """Compute DFS scores for mitigation strategies"""
-    n_rcs = len(rc_weights)
+    n_rcs = len(rc_weights_dfs)
     n_mss = len(relationship_matrix[0])
     
     scores = [None] * n_mss
     
     for j in range(n_mss):
         dfs_list = []
-        weight_list = []
         
         for i in range(n_rcs):
             # Multiply RC weight by relationship strength
-            product = dfs_multiplication(rc_weights[i], relationship_matrix[i][j])
+            product = dfs_multiplication(rc_weights_dfs[i], relationship_matrix[i][j])
             dfs_list.append(product)
-            weight_list.append(1.0)  # Equal weights for summation
         
         # Sum the products using addition operation
         if dfs_list:
             total = dfs_list[0]
-            for i in range(1, len(dfs_list)):
-                total = dfs_addition(total, dfs_list[i])
+            for k in range(1, len(dfs_list)):
+                total = dfs_addition(total, dfs_list[k])
             scores[j] = total
     
     return scores
 
 # ==================== MILP MODEL ====================
 
-def solve_milp_optimization(ms_scores, implementation_costs, implementation_times, 
-                           saving_costs, saving_times, available_budget, available_time):
-    """Solve the MILP optimization problem using a greedy approach"""
+def solve_milp_optimization(ms_scores, implementation_costs, implementation_times,
+                            saving_costs, saving_times, available_budget, available_time):
+    """
+    Solve the MILP optimization problem using PuLP.
+    """
     n_ms = len(ms_scores)
     
-    # Calculate a score-to-cost ratio for each strategy
-    score_cost_ratios = []
+    # 1. Create the model
+    model = pulp.LpProblem("Resilience_Strategy_Optimization", pulp.LpMaximize)
+    
+    # 2. Define Decision Variables
+    # x[j] = 1 if mitigation strategy j is selected, 0 otherwise
+    x = pulp.LpVariable.dicts("MS", range(n_ms), cat='Binary')
+    
+    # y[i][j] = 1 if both MS_i and MS_j are selected
+    # This is to linearize the quadratic saving term (x_i * x_j)
+    y = pulp.LpVariable.dicts("y",
+                             ((i, j) for i in range(n_ms) for j in range(i + 1, n_ms)),
+                             cat='Binary')
+    
+    # 3. Define Objective Function
+    # Maximize total resilience score
+    model += pulp.lpSum(ms_scores[j] * x[j] for j in range(n_ms)), "Total_Resilience_Score"
+    
+    # 4. Define Constraints
+    
+    # Cost Constraint
+    total_implementation_cost = pulp.lpSum(implementation_costs[j] * x[j] for j in range(n_ms))
+    total_cost_saving = pulp.lpSum(saving_costs[i][j] * y[(i, j)]
+                                   for i in range(n_ms) for j in range(i + 1, n_ms))
+    model += total_implementation_cost - total_cost_saving <= available_budget, "Budget_Constraint"
+    
+    # Time Constraint
+    total_implementation_time = pulp.lpSum(implementation_times[j] * x[j] for j in range(n_ms))
+    total_time_saving = pulp.lpSum(saving_times[i][j] * y[(i, j)]
+                                   for i in range(n_ms) for j in range(i + 1, n_ms))
+    model += total_implementation_time - total_time_saving <= available_time, "Time_Constraint"
+    
+    # Linearization Constraints for y[i][j] = x[i] * x[j]
     for i in range(n_ms):
-        # Normalize score and cost
-        norm_score = ms_scores[i] / max(ms_scores) if max(ms_scores) > 0 else 0
-        norm_cost = implementation_costs[i] / max(implementation_costs) if max(implementation_costs) > 0 else 1
-        ratio = norm_score / norm_cost if norm_cost > 0 else 0
-        score_cost_ratios.append((i, ratio))
+        for j in range(i + 1, n_ms):
+            model += y[(i, j)] <= x[i], f"Linearization_Constraint_y_{i}_{j}_1"
+            model += y[(i, j)] <= x[j], f"Linearization_Constraint_y_{i}_{j}_2"
+            model += y[(i, j)] >= x[i] + x[j] - 1, f"Linearization_Constraint_y_{i}_{j}_3"
+            
+    # 5. Solve the model
+    # model.solve() uses the default CBC solver
+    model.solve(pulp.PULP_CBC_CMD(msg=0)) # msg=0 suppresses solver output
     
-    # Sort by score-to-cost ratio (descending)
-    score_cost_ratios.sort(key=lambda x: x[1], reverse=True)
-    
-    # Greedy selection based on score-to-cost ratio
-    selected_ms = []
-    total_cost = 0
-    total_time = 0
-    
-    for idx, _ in score_cost_ratios:
-        # Check if adding this strategy exceeds constraints
-        new_cost = total_cost + implementation_costs[idx]
-        new_time = total_time + implementation_times[idx]
+    # 6. Extract Results
+    if pulp.LpStatus[model.status] == 'Optimal':
+        selected_ms = [j for j in range(n_ms) if x[j].varValue > 0.5]
         
-        # Check for savings with already selected strategies
-        for selected_idx in selected_ms:
-            new_cost -= saving_costs[min(idx, selected_idx)][max(idx, selected_idx)]
-            new_time -= saving_times[min(idx, selected_idx)][max(idx, selected_idx)]
+        # Calculate final values
+        total_score = pulp.value(model.objective)
+        total_cost = pulp.value(total_implementation_cost - total_cost_saving)
+        total_time = pulp.value(total_implementation_time - total_time_saving)
         
-        # If constraints are satisfied, select this strategy
-        if new_cost <= available_budget and new_time <= available_time:
-            selected_ms.append(idx)
-            total_cost = new_cost
-            total_time = new_time
-    
-    # Calculate total score
-    total_score = sum(ms_scores[i] for i in selected_ms)
-    
-    return selected_ms, total_score, total_cost, total_time
+        return selected_ms, total_score, total_cost, total_time
+    else:
+        # No optimal solution found (e.g., infeasible)
+        return None, 0, 0, 0
+
 
 # ==================== STREAMLIT APP ====================
 
@@ -424,7 +467,9 @@ def main():
     if 'expert_weights' not in st.session_state:
         st.session_state.expert_weights = None
     if 'rc_weights' not in st.session_state:
-        st.session_state.rc_weights = None
+        st.session_state.rc_weights = None # This will store crisp weights
+    if 'rc_weights_dfs' not in st.session_state:
+        st.session_state.rc_weights_dfs = None # This will store fuzzy weights
     if 'ms_scores' not in st.session_state:
         st.session_state.ms_scores = None
     
@@ -437,30 +482,34 @@ def main():
         "Results Summary"
     ]
     
-    current_step = st.session_state.current_step
+    # Use st.query_params to manage steps (more robust than session state alone for navigation)
+    # This part is optional but good practice
+    
+    current_step_idx = st.session_state.current_step - 1
     
     # Progress bar
-    progress = st.progress(current_step / len(steps))
-    st.write(f"**Current Step: {steps[current_step-1]}**")
+    progress = (st.session_state.current_step) / len(steps)
+    st.progress(progress, text=f"Step {st.session_state.current_step}/{len(steps)}: {steps[current_step_idx]}")
+
     
     # Step 1: ML-Based Expert Weighting
-    if current_step == 1:
+    if st.session_state.current_step == 1:
         step1_ml_expert_weighting()
     
     # Step 2: Decomposed Fuzzy AHP
-    elif current_step == 2:
+    elif st.session_state.current_step == 2:
         step2_dfs_ahp()
     
     # Step 3: Decomposed Fuzzy QFD
-    elif current_step == 3:
+    elif st.session_state.current_step == 3:
         step3_dfs_qfd()
     
     # Step 4: MILP Optimization
-    elif current_step == 4:
+    elif st.session_state.current_step == 4:
         step4_milp_optimization()
     
     # Step 5: Results Summary
-    elif current_step == 5:
+    elif st.session_state.current_step == 5:
         step5_results_summary()
 
 def step1_ml_expert_weighting():
@@ -480,6 +529,9 @@ def step1_ml_expert_weighting():
         ["Use default example data", "Upload custom data"],
         horizontal=True
     )
+    
+    expert_data = None
+    cov_matrix = None
     
     if data_option == "Use default example data":
         # Default expert data (4 experts × 10 dimensions)
@@ -508,17 +560,26 @@ def step1_ml_expert_weighting():
         
     else:
         # File upload for custom data
-        uploaded_file = st.file_uploader("Upload expert data (CSV format)", type=['csv'])
+        uploaded_file = st.file_uploader("Upload expert data (CSV or Excel)", type=['csv', 'xlsx'])
         if uploaded_file is not None:
             try:
-                expert_data = pd.read_csv(uploaded_file).values
+                if uploaded_file.name.endswith('.csv'):
+                    expert_data_df = pd.read_csv(uploaded_file)
+                else:
+                    expert_data_df = pd.read_excel(uploaded_file)
+                
+                # Try to automatically skip index/header columns if they look like text
+                if expert_data_df.iloc[:, 0].dtype == 'object':
+                    expert_data_df = expert_data_df.set_index(expert_data_df.columns[0])
+                    
+                expert_data = expert_data_df.values
                 cov_matrix = None  # Will be computed from data
                 st.success(f"Loaded data with {expert_data.shape[0]} experts and {expert_data.shape[1]} features.")
             except Exception as e:
                 st.error(f"Error loading data: {e}")
                 return
         else:
-            st.info("Please upload a CSV file with expert dimensional data.")
+            st.info("Please upload a CSV or Excel file with expert dimensional data.")
             return
     
     # Display expert data
@@ -553,7 +614,7 @@ def step1_ml_expert_weighting():
                 with col1:
                     st.metric("Maximum Eigenvalue", f"{max_eigenvalue:.6f}")
                     st.write("Sorted Eigenvector Components:")
-                    st.write(sorted_eigenvector)
+                    st.dataframe(pd.Series(sorted_eigenvector), use_container_width=True)
                 
                 with col2:
                     st.write("Expert Scores and Weights:")
@@ -591,6 +652,9 @@ def step2_dfs_ahp():
     # Get expert weights from previous step
     if st.session_state.expert_weights is None:
         st.error("Please complete Step 1 first to compute expert weights.")
+        if st.button("Go to Step 1"):
+            st.session_state.current_step = 1
+            st.rerun()
         return
     
     n_experts = len(st.session_state.expert_weights)
@@ -607,8 +671,9 @@ def step2_dfs_ahp():
     # Input resilience challenge names
     st.subheader("Resilience Challenge Names")
     rc_names = []
+    cols = st.columns(n_rc)
     for i in range(n_rc):
-        rc_name = st.text_input(
+        rc_name = cols[i].text_input(
             f"Resilience Challenge {i+1}",
             value=f"RC{i+1}",
             key=f"rc_name_{i}"
@@ -619,73 +684,74 @@ def step2_dfs_ahp():
     with st.expander("DFS Linguistic Scale Reference"):
         scale_df = pd.DataFrame([
             {"Linguistic Term": term, "O(μ,θ)": f"({values['O'][0]}, {values['O'][1]})", 
-             "P(μ,θ)": f"({values['P'][0]}, {values['P'][1]})", "Saaty Scale": i+1}
+             "P(μ,θ)": f"({values['P'][0]}, {values['P'][1]})", "Meaning": term}
             for i, (term, values) in enumerate(dfs_linguistic_scale.items())
         ])
         st.dataframe(scale_df, use_container_width=True, hide_index=True)
     
     # Collect pairwise comparisons from each expert
     st.subheader("Pairwise Comparison Matrices")
-    st.write("Each expert provides pairwise comparisons for resilience challenges.")
+    st.write("Each expert provides pairwise comparisons for resilience challenges. **You only need to fill the upper triangle.**")
     
     expert_matrices = []
     
+    # Use tabs for experts
+    expert_tabs = st.tabs([f"Expert {i+1} (Weight: {st.session_state.expert_weights[i]:.3f})" for i in range(n_experts)])
+    
     for expert_idx in range(n_experts):
-        st.write(f"**Expert {expert_idx+1}** (Weight: {st.session_state.expert_weights[expert_idx]:.3f})")
-        
-        # Create an empty matrix for this expert
-        expert_matrix = [[None for _ in range(n_rc)] for _ in range(n_rc)]
-        
-        # Create a dataframe for easier input
-        comparison_data = []
-        for i in range(n_rc):
-            row = ["" for _ in range(n_rc)]
-            row[i] = "-"  # Diagonal
-            comparison_data.append(row)
-        
-        df_comparison = pd.DataFrame(
-            comparison_data,
-            columns=rc_names,
-            index=rc_names
-        )
-        
-        # Use data editor for pairwise comparisons
-        st.write(f"Select linguistic terms for Expert {expert_idx+1}:")
-        edited_df = st.data_editor(
-            df_comparison,
-            column_config={
-                col: st.column_config.SelectboxColumn(
-                    col,
-                    options=[""] + linguistic_options,
-                    required=False
-                ) for col in rc_names
-            },
-            use_container_width=True,
-            key=f"expert_{expert_idx}_comparisons"
-        )
-        
-        # Convert the edited dataframe to DFS matrix
-        for i in range(n_rc):
-            for j in range(n_rc):
-                if i == j:
-                    expert_matrix[i][j] = dfs_linguistic_scale['EEI']  # Exactly Equal on diagonal
-                elif edited_df.iloc[i, j]:
-                    expert_matrix[i][j] = dfs_linguistic_scale[edited_df.iloc[i, j]]
-                else:
-                    # If no value provided, use the reciprocal of j,i if available
-                    if edited_df.iloc[j, i]:
+        with expert_tabs[expert_idx]:
+            
+            # Create an empty matrix for this expert
+            expert_matrix = [[None for _ in range(n_rc)] for _ in range(n_rc)]
+            
+            # Create a dataframe for easier input
+            comparison_data = []
+            for i in range(n_rc):
+                row = [None] * n_rc
+                row[i] = "EEI"  # Diagonal
+                comparison_data.append(row)
+            
+            df_comparison = pd.DataFrame(
+                comparison_data,
+                columns=rc_names,
+                index=rc_names
+            )
+            
+            # Use data editor for pairwise comparisons
+            edited_df = st.data_editor(
+                df_comparison,
+                column_config={
+                    col_name: st.column_config.SelectboxColumn(
+                        col_name,
+                        options=linguistic_options,
+                        required=True,
+                        default="EEI"
+                    ) for col_name in rc_names
+                },
+                use_container_width=True,
+                key=f"expert_{expert_idx}_comparisons"
+            )
+            
+            # Convert the edited dataframe to DFS matrix
+            all_filled = True
+            for i in range(n_rc):
+                for j in range(n_rc):
+                    if i == j:
+                        expert_matrix[i][j] = dfs_linguistic_scale['EEI']  # Exactly Equal on diagonal
+                    elif i < j: # Only read upper triangle
+                        term = edited_df.iloc[i, j]
+                        if not term:
+                            all_filled = False
+                        expert_matrix[i][j] = dfs_linguistic_scale[term]
+                    else: # Automatically fill lower triangle with reciprocal
                         reciprocal_term = edited_df.iloc[j, i]
-                        # For reciprocal, swap O and P
                         original = dfs_linguistic_scale[reciprocal_term]
                         expert_matrix[i][j] = {
-                            'O': original['P'],
+                            'O': original['P'], # Swap O and P
                             'P': original['O']
                         }
-                    else:
-                        # Default to Equal Importance if no data
-                        expert_matrix[i][j] = dfs_linguistic_scale['EEI']
-        
-        expert_matrices.append(expert_matrix)
+            
+            expert_matrices.append(expert_matrix)
     
     if st.button("Compute Resilience Challenge Weights"):
         with st.spinner("Computing DFS-AHP weights..."):
@@ -694,22 +760,15 @@ def step2_dfs_ahp():
                 aggregated_matrix = dfs_ahp_aggregation(expert_matrices, st.session_state.expert_weights)
                 
                 # Compute weights
-                rc_weights = compute_dfs_ahp_weights(aggregated_matrix)
-                
-                # Defuzzify weights
-                defuzzified_weights = [dfs_defuzzification(weight) for weight in rc_weights]
-                
-                # Normalize defuzzified weights
-                total_weight = sum(defuzzified_weights)
-                normalized_weights = [w/total_weight for w in defuzzified_weights] if total_weight > 0 else defuzzified_weights
+                dfs_weights, normalized_weights = compute_dfs_ahp_weights(aggregated_matrix)
                 
                 # Store results
-                st.session_state.rc_weights = normalized_weights
+                st.session_state.rc_weights = normalized_weights # Crisp weights
+                st.session_state.rc_weights_dfs = dfs_weights # Fuzzy weights (GMs)
                 st.session_state.rc_names = rc_names
                 st.session_state.dfs_ahp_results = {
                     'aggregated_matrix': aggregated_matrix,
-                    'dfs_weights': rc_weights,
-                    'defuzzified_weights': defuzzified_weights,
+                    'dfs_weights': dfs_weights,
                     'normalized_weights': normalized_weights
                 }
                 
@@ -718,19 +777,18 @@ def step2_dfs_ahp():
                 
                 results_df = pd.DataFrame({
                     'Resilience Challenge': rc_names,
-                    'DFS Weight (O)': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f})" for w in rc_weights],
-                    'DFS Weight (P)': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f})" for w in rc_weights],
-                    'CI': [dfs_consistency_index(w) for w in rc_weights],
-                    'Defuzzified Weight': defuzzified_weights,
-                    'Normalized Weight': normalized_weights
+                    'DFS Weight (GM) - O': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f})" for w in dfs_weights],
+                    'DFS Weight (GM) - P': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f})" for w in dfs_weights],
+                    'CI': [dfs_consistency_index(w) for w in dfs_weights],
+                    'Normalized Weight (Crisp)': normalized_weights
                 })
                 
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
                 
                 # Display ranking
-                ranking_df = results_df.nlargest(n_rc, 'Normalized Weight')[['Resilience Challenge', 'Normalized Weight']]
+                ranking_df = results_df.sort_values(by='Normalized Weight (Crisp)', ascending=False)
                 ranking_df['Rank'] = range(1, len(ranking_df) + 1)
-                ranking_df = ranking_df[['Rank', 'Resilience Challenge', 'Normalized Weight']]
+                ranking_df = ranking_df[['Rank', 'Resilience Challenge', 'Normalized Weight (Crisp)']]
                 
                 st.subheader("Ranking of Resilience Challenges")
                 st.dataframe(ranking_df, use_container_width=True, hide_index=True)
@@ -739,6 +797,7 @@ def step2_dfs_ahp():
                 
             except Exception as e:
                 st.error(f"Error computing DFS-AHP weights: {e}")
+                st.exception(e) # Show full traceback
     
     if st.session_state.rc_weights is not None:
         st.markdown("</div>", unsafe_allow_html=True)
@@ -768,6 +827,9 @@ def step3_dfs_qfd():
     # Check if previous steps are completed
     if st.session_state.rc_weights is None:
         st.error("Please complete Step 2 first to compute resilience challenge weights.")
+        if st.button("Go to Step 2"):
+            st.session_state.current_step = 2
+            st.rerun()
         return
     
     rc_names = st.session_state.rc_names
@@ -786,8 +848,9 @@ def step3_dfs_qfd():
     # Input mitigation strategy names
     st.subheader("Mitigation Strategy Names")
     ms_names = []
+    cols = st.columns(n_ms)
     for i in range(n_ms):
-        ms_name = st.text_input(
+        ms_name = cols[i].text_input(
             f"Mitigation Strategy {i+1}",
             value=f"MS{i+1}",
             key=f"ms_name_{i}"
@@ -796,53 +859,54 @@ def step3_dfs_qfd():
     
     # Collect relationship assessments from experts
     st.subheader("Relationship Assessments")
-    st.write("Experts assess the strength of relationship between resilience challenges and mitigation strategies.")
+    st.write("Experts assess the strength of relationship between resilience challenges (rows) and mitigation strategies (columns).")
     
     expert_relationships = []
     
+    # Use tabs for experts
+    expert_tabs = st.tabs([f"Expert {i+1} (Weight: {st.session_state.expert_weights[i]:.3f})" for i in range(n_experts)])
+    
     for expert_idx in range(n_experts):
-        st.write(f"**Expert {expert_idx+1}** (Weight: {st.session_state.expert_weights[expert_idx]:.3f})")
-        
-        # Create relationship matrix for this expert
-        relationship_matrix = [[None for _ in range(n_ms)] for _ in range(n_rc)]
-        
-        # Create a dataframe for input
-        relationship_data = []
-        for i in range(n_rc):
-            row = ["" for _ in range(n_ms)]
-            relationship_data.append(row)
-        
-        df_relationship = pd.DataFrame(
-            relationship_data,
-            columns=ms_names,
-            index=rc_names
-        )
-        
-        # Use data editor for relationship assessments
-        st.write(f"Expert {expert_idx+1} - Select relationship strengths:")
-        edited_df = st.data_editor(
-            df_relationship,
-            column_config={
-                col: st.column_config.SelectboxColumn(
-                    col,
-                    options=[""] + linguistic_options,
-                    required=False
-                ) for col in ms_names
-            },
-            use_container_width=True,
-            key=f"expert_{expert_idx}_relationships"
-        )
-        
-        # Convert to DFS values
-        for i in range(n_rc):
-            for j in range(n_ms):
-                if edited_df.iloc[i, j]:
-                    relationship_matrix[i][j] = dfs_linguistic_scale[edited_df.iloc[i, j]]
-                else:
-                    # Default to Equal Importance if no data
-                    relationship_matrix[i][j] = dfs_linguistic_scale['EEI']
-        
-        expert_relationships.append(relationship_matrix)
+        with expert_tabs[expert_idx]:
+            
+            # Create relationship matrix for this expert
+            relationship_matrix = [[None for _ in range(n_ms)] for _ in range(n_rc)]
+            
+            # Create a dataframe for input
+            relationship_data = [["EEI" for _ in range(n_ms)] for _ in range(n_rc)]
+            
+            df_relationship = pd.DataFrame(
+                relationship_data,
+                columns=ms_names,
+                index=rc_names
+            )
+            
+            # Use data editor for relationship assessments
+            edited_df = st.data_editor(
+                df_relationship,
+                column_config={
+                    col: st.column_config.SelectboxColumn(
+                        col,
+                        options=linguistic_options,
+                        required=True,
+                        default="EEI"
+                    ) for col in ms_names
+                },
+                use_container_width=True,
+                key=f"expert_{expert_idx}_relationships"
+            )
+            
+            # Convert to DFS values
+            for i in range(n_rc):
+                for j in range(n_ms):
+                    term = edited_df.iloc[i, j]
+                    if term:
+                        relationship_matrix[i][j] = dfs_linguistic_scale[term]
+                    else:
+                        # Default to Equal Importance if no data
+                        relationship_matrix[i][j] = dfs_linguistic_scale['EEI']
+            
+            expert_relationships.append(relationship_matrix)
     
     if st.button("Compute Mitigation Strategy Scores"):
         with st.spinner("Computing DFS-QFD scores..."):
@@ -851,15 +915,8 @@ def step3_dfs_qfd():
                 aggregated_relationships = dfs_qfd_relationship_matrix(
                     expert_relationships, st.session_state.expert_weights)
                 
-                # Convert RC weights to DFS format (using normalized weights with EEI format)
-                dfs_rc_weights = []
-                for weight in st.session_state.rc_weights:
-                    # Scale the weight to fit in DFS format (0.5 to 0.9 range)
-                    scaled_weight = 0.5 + (weight * 0.4)  # Map [0,1] to [0.5,0.9]
-                    dfs_rc_weights.append({
-                        'O': (scaled_weight, 1 - scaled_weight),
-                        'P': (1 - scaled_weight, scaled_weight)
-                    })
+                # Get the fuzzy RC weights (geometric means from AHP)
+                dfs_rc_weights = st.session_state.rc_weights_dfs
                 
                 # Compute MS scores
                 ms_scores_dfs = compute_dfs_qfd_scores(dfs_rc_weights, aggregated_relationships)
@@ -871,7 +928,7 @@ def step3_dfs_qfd():
                 AI_j = ms_scores
                 
                 # Store results
-                st.session_state.ms_scores = AI_j
+                st.session_state.ms_scores = AI_j # Store crisp scores for MILP
                 st.session_state.ms_names = ms_names
                 st.session_state.dfs_qfd_results = {
                     'aggregated_relationships': aggregated_relationships,
@@ -887,15 +944,15 @@ def step3_dfs_qfd():
                     'DFS Score (O)': [f"({s['O'][0]:.3f}, {s['O'][1]:.3f})" for s in ms_scores_dfs],
                     'DFS Score (P)': [f"({s['P'][0]:.3f}, {s['P'][1]:.3f})" for s in ms_scores_dfs],
                     'CI': [dfs_consistency_index(s) for s in ms_scores_dfs],
-                    'AI_j Score': AI_j
+                    'AI_j Score (Crisp)': AI_j
                 })
                 
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
                 
                 # Display ranking
-                ranking_df = results_df.nlargest(n_ms, 'AI_j Score')[['Mitigation Strategy', 'AI_j Score']]
+                ranking_df = results_df.sort_values(by='AI_j Score (Crisp)', ascending=False)
                 ranking_df['Rank'] = range(1, len(ranking_df) + 1)
-                ranking_df = ranking_df[['Rank', 'Mitigation Strategy', 'AI_j Score']]
+                ranking_df = ranking_df[['Rank', 'Mitigation Strategy', 'AI_j Score (Crisp)']]
                 
                 st.subheader("Ranking of Mitigation Strategies")
                 st.dataframe(ranking_df, use_container_width=True, hide_index=True)
@@ -904,6 +961,7 @@ def step3_dfs_qfd():
                 
             except Exception as e:
                 st.error(f"Error computing DFS-QFD scores: {e}")
+                st.exception(e)
     
     if st.session_state.ms_scores is not None:
         st.markdown("</div>", unsafe_allow_html=True)
@@ -933,6 +991,9 @@ def step4_milp_optimization():
     # Check if previous steps are completed
     if st.session_state.ms_scores is None:
         st.error("Please complete Step 3 first to compute mitigation strategy scores.")
+        if st.button("Go to Step 3"):
+            st.session_state.current_step = 3
+            st.rerun()
         return
     
     ms_names = st.session_state.ms_names
@@ -954,7 +1015,7 @@ def step4_milp_optimization():
     
     with col2:
         available_time = st.number_input(
-            "Available Time (∄)",
+            "Available Time (∄, e.g., in months)",
             min_value=0.0,
             value=12.0,
             step=1.0
@@ -966,27 +1027,29 @@ def step4_milp_optimization():
     implementation_costs = []
     implementation_times = []
     
-    for i, ms_name in enumerate(ms_names):
-        col1, col2 = st.columns(2)
-        with col1:
-            cost = st.number_input(
-                f"Cost for {ms_name}",
-                min_value=0.0,
-                value=10000.0 + i * 5000.0,
-                step=1000.0,
-                key=f"cost_{i}"
-            )
-            implementation_costs.append(cost)
-        
-        with col2:
-            time = st.number_input(
-                f"Time for {ms_name} (months)",
-                min_value=0.0,
-                value=3.0 + i * 1.0,
-                step=0.5,
-                key=f"time_{i}"
-            )
-            implementation_times.append(time)
+    # Use data editor for faster input
+    cost_time_df = pd.DataFrame(
+        [
+            {
+                "Strategy": ms_name,
+                "Cost": 10000.0 + i * 5000.0,
+                "Time (months)": 3.0 + i * 1.0,
+            }
+            for i, ms_name in enumerate(ms_names)
+        ]
+    ).set_index("Strategy")
+
+    edited_cost_time_df = st.data_editor(
+        cost_time_df,
+        column_config={
+            "Cost": st.column_config.NumberColumn(format="$%.2f", min_value=0),
+            "Time (months)": st.column_config.NumberColumn(min_value=0)
+        },
+        use_container_width=True
+    )
+    implementation_costs = edited_cost_time_df["Cost"].tolist()
+    implementation_times = edited_cost_time_df["Time (months)"].tolist()
+
     
     # Input saving costs and times (interdependencies)
     st.subheader("Saving Parameters (Interdependencies)")
@@ -995,31 +1058,41 @@ def step4_milp_optimization():
     saving_costs = [[0.0 for _ in range(n_ms)] for _ in range(n_ms)]
     saving_times = [[0.0 for _ in range(n_ms)] for _ in range(n_ms)]
     
-    for i in range(n_ms):
-        for j in range(i+1, n_ms):
-            st.write(f"**{ms_names[i]} and {ms_names[j]}**")
-            col1, col2 = st.columns(2)
-            with col1:
-                cost_saving = st.number_input(
-                    f"Cost saving",
-                    min_value=0.0,
-                    value=1000.0,
-                    step=100.0,
-                    key=f"cost_save_{i}_{j}"
-                )
-                saving_costs[i][j] = cost_saving
-                saving_costs[j][i] = cost_saving
+    # Create a list of pairs for easier input
+    pairs = [(i, j) for i in range(n_ms) for j in range(i+1, n_ms)]
+    if not pairs:
+        st.info("At least two mitigation strategies are needed to define interdependencies.")
+    else:
+        # Data editor for savings
+        savings_data = [
+            {
+                "Pair": f"{ms_names[i]} - {ms_names[j]}",
+                "Cost Saving": 1000.0,
+                "Time Saving": 0.5,
+                "_pair_idx": (i, j) # Helper to map back
+            }
+            for i, j in pairs
+        ]
+        
+        edited_savings_df = st.data_editor(
+            savings_data,
+            column_config={
+                "Pair": st.column_config.TextColumn(disabled=True),
+                "Cost Saving": st.column_config.NumberColumn(min_value=0.0, step=100.0),
+                "Time Saving": st.column_config.NumberColumn(min_value=0.0, step=0.1),
+                "_pair_idx": None # Hide this column
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+        for item in edited_savings_df:
+            i, j = item["_pair_idx"]
+            saving_costs[i][j] = item["Cost Saving"]
+            saving_costs[j][i] = item["Cost Saving"] # Symmetric
+            saving_times[i][j] = item["Time Saving"]
+            saving_times[j][i] = item["Time Saving"] # Symmetric
             
-            with col2:
-                time_saving = st.number_input(
-                    f"Time saving (months)",
-                    min_value=0.0,
-                    value=0.5,
-                    step=0.1,
-                    key=f"time_save_{i}_{j}"
-                )
-                saving_times[i][j] = time_saving
-                saving_times[j][i] = time_saving
     
     if st.button("Solve MILP Optimization"):
         with st.spinner("Solving MILP optimization problem..."):
@@ -1030,6 +1103,11 @@ def step4_milp_optimization():
                     saving_costs, saving_times, available_budget, available_time
                 )
                 
+                if selected_ms is None:
+                    st.error("Optimization failed. The problem is likely infeasible.")
+                    st.warning("This means no combination of strategies can satisfy your budget and time constraints. Try increasing the available budget or time.")
+                    return
+
                 # Store results
                 st.session_state.milp_results = {
                     'selected_ms': selected_ms,
@@ -1037,7 +1115,9 @@ def step4_milp_optimization():
                     'total_cost': total_cost,
                     'total_time': total_time,
                     'available_budget': available_budget,
-                    'available_time': available_time
+                    'available_time': available_time,
+                    'implementation_costs': implementation_costs,
+                    'implementation_times': implementation_times
                 }
                 
                 # Display results
@@ -1046,10 +1126,10 @@ def step4_milp_optimization():
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    st.metric("Total Resilience Score", f"{total_score:.2f}")
+                    st.metric("Total Resilience Score", f"{total_score:.3f}")
                 
                 with col2:
-                    st.metric("Total Cost", f"${total_cost:.2f}")
+                    st.metric("Total Cost", f"${total_cost:,.2f}")
                 
                 with col3:
                     st.metric("Total Time", f"{total_time:.1f} months")
@@ -1068,24 +1148,27 @@ def step4_milp_optimization():
                     })
                     st.dataframe(selected_df, use_container_width=True, hide_index=True)
                 else:
-                    st.warning("No strategies were selected. Consider increasing budget or time constraints.")
+                    st.warning("No strategies were selected. The constraints might be too tight, or no strategy provides positive value.")
                 
                 # Display resource utilization
                 st.subheader("Resource Utilization")
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    budget_utilization = (total_cost / available_budget) * 100
+                    budget_utilization = (total_cost / available_budget) * 100 if available_budget > 0 else 0
                     st.metric("Budget Utilization", f"{budget_utilization:.1f}%")
+                    st.progress(budget_utilization / 100)
                 
                 with col2:
-                    time_utilization = (total_time / available_time) * 100
+                    time_utilization = (total_time / available_time) * 100 if available_time > 0 else 0
                     st.metric("Time Utilization", f"{time_utilization:.1f}%")
+                    st.progress(time_utilization / 100)
                 
                 st.success("MILP optimization completed successfully!")
                 
             except Exception as e:
                 st.error(f"Error solving MILP optimization: {e}")
+                st.exception(e)
     
     if hasattr(st.session_state, 'milp_results'):
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1111,81 +1194,104 @@ def step5_results_summary():
     </div>
     """, unsafe_allow_html=True)
     
-    # Expert Weights Summary
-    if hasattr(st.session_state, 'expert_weights'):
-        st.subheader("Expert Weights")
-        expert_df = pd.DataFrame({
-            'Expert': [f"Expert {i+1}" for i in range(len(st.session_state.expert_weights))],
-            'Weight': st.session_state.expert_weights
-        })
-        st.dataframe(expert_df, use_container_width=True, hide_index=True)
+    # Check if all steps are completed
+    if not all(k in st.session_state for k in ['expert_weights', 'rc_weights', 'ms_scores', 'milp_results']):
+        st.error("Not all steps have been completed. Please go back and complete the analysis.")
+        if st.button("Go to Step 1"):
+            st.session_state.current_step = 1
+            st.rerun()
+        return
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Expert Weights Summary
+        if hasattr(st.session_state, 'expert_weights'):
+            st.subheader("Expert Weights (Step 1)")
+            expert_df = pd.DataFrame({
+                'Expert': [f"Expert {i+1}" for i in range(len(st.session_state.expert_weights))],
+                'Weight': st.session_state.expert_weights
+            })
+            st.dataframe(expert_df, use_container_width=True, hide_index=True)
+        
+        # Resilience Challenge Weights Summary
+        if hasattr(st.session_state, 'rc_weights'):
+            st.subheader("Resilience Challenge Weights (Step 2)")
+            rc_df = pd.DataFrame({
+                'Resilience Challenge': st.session_state.rc_names,
+                'Weight': st.session_state.rc_weights
+            }).sort_values('Weight', ascending=False).reset_index(drop=True)
+            rc_df['Rank'] = range(1, len(rc_df) + 1)
+            st.dataframe(rc_df[['Rank', 'Resilience Challenge', 'Weight']], 
+                         use_container_width=True, hide_index=True)
+        
+        # Mitigation Strategy Scores Summary
+        if hasattr(st.session_state, 'ms_scores'):
+            st.subheader("Mitigation Strategy Scores (Step 3)")
+            ms_df = pd.DataFrame({
+                'Mitigation Strategy': st.session_state.ms_names,
+                'AI_j Score': st.session_state.ms_scores
+            }).sort_values('AI_j Score', ascending=False).reset_index(drop=True)
+            ms_df['Rank'] = range(1, len(ms_df) + 1)
+            st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score']], 
+                         use_container_width=True, hide_index=True)
     
-    # Resilience Challenge Weights Summary
-    if hasattr(st.session_state, 'rc_weights'):
-        st.subheader("Resilience Challenge Weights")
-        rc_df = pd.DataFrame({
-            'Resilience Challenge': st.session_state.rc_names,
-            'Weight': st.session_state.rc_weights
-        }).sort_values('Weight', ascending=False)
-        rc_df['Rank'] = range(1, len(rc_df) + 1)
-        st.dataframe(rc_df[['Rank', 'Resilience Challenge', 'Weight']], 
-                    use_container_width=True, hide_index=True)
-    
-    # Mitigation Strategy Scores Summary
-    if hasattr(st.session_state, 'ms_scores'):
-        st.subheader("Mitigation Strategy Scores")
-        ms_df = pd.DataFrame({
-            'Mitigation Strategy': st.session_state.ms_names,
-            'AI_j Score': st.session_state.ms_scores
-        }).sort_values('AI_j Score', ascending=False)
-        ms_df['Rank'] = range(1, len(ms_df) + 1)
-        st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score']], 
-                    use_container_width=True, hide_index=True)
-    
-    # MILP Optimization Results Summary
-    if hasattr(st.session_state, 'milp_results'):
-        st.subheader("Optimization Results")
-        milp_results = st.session_state.milp_results
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Resilience Score", f"{milp_results['total_score']:.2f}")
-        
-        with col2:
-            st.metric("Total Cost", f"${milp_results['total_cost']:.2f}")
-        
-        with col3:
-            st.metric("Total Time", f"{milp_results['total_time']:.1f} months")
-        
-        with col4:
+    with col2:
+        # MILP Optimization Results Summary
+        if hasattr(st.session_state, 'milp_results'):
+            st.subheader("Optimization Results (Step 4)")
+            milp_results = st.session_state.milp_results
+            
+            st.metric("Total Resilience Score", f"{milp_results['total_score']:.3f}")
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Total Cost", f"${milp_results['total_cost']:,.2f}",
+                      f"out of ${milp_results['available_budget']:,.2f}")
+            c2.metric("Total Time", f"{milp_results['total_time']:.1f} months",
+                      f"out of {milp_results['available_time']:.1f} months")
+
             st.metric("Selected Strategies", len(milp_results['selected_ms']))
-        
-        if milp_results['selected_ms']:
-            st.write("**Selected Mitigation Strategies:**")
-            selected_list = [st.session_state.ms_names[i] for i in milp_results['selected_ms']]
-            for i, strategy in enumerate(selected_list, 1):
-                st.write(f"{i}. {strategy}")
-    
+            
+            if milp_results['selected_ms']:
+                st.write("**Optimal Set of Mitigation Strategies:**")
+                selected_list = [st.session_state.ms_names[i] for i in milp_results['selected_ms']]
+                
+                selected_final_df = pd.DataFrame({
+                    'Strategy': selected_list,
+                    'Score': [st.session_state.ms_scores[i] for i in milp_results['selected_ms']],
+                    'Cost': [milp_results['implementation_costs'][i] for i in milp_results['selected_ms']],
+                    'Time': [milp_results['implementation_times'][i] for i in milp_results['selected_ms']]
+                }).sort_values('Score', ascending=False)
+
+                st.dataframe(selected_final_df, use_container_width=True, hide_index=True)
+
     # Recommendations
     st.subheader("Recommendations")
     
     if (hasattr(st.session_state, 'milp_results') and 
         st.session_state.milp_results['selected_ms']):
         
-        st.success("""
-        **Implementation Priority:**
-        - Focus on implementing the selected mitigation strategies in the order of their AI_j scores
-        - Consider the interdependencies between strategies to maximize cost and time savings
-        - Monitor budget and time utilization throughout implementation
-        """)
+        st.markdown("""
+        <div class="success-box">
+        <strong>Implementation Priority:</strong>
+        <ul>
+            <li>Focus on implementing the <b>optimal set</b> of mitigation strategies listed above.</li>
+            <li>The selection is not just based on individual scores but on the <b>best combination</b> that respects interdependencies and constraints.</li>
+            <li>Monitor budget and time utilization throughout implementation.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.warning("""
-        **Recommendations:**
-        - Review the constraints and consider adjusting budget or time allocations
-        - Re-evaluate the mitigation strategy costs and implementation times
-        - Consider phased implementation approach
-        """)
+        st.markdown("""
+        <div class="warning-box">
+        <strong>Recommendations:</strong>
+        <ul>
+            <li><b>No optimal solution found or no strategies selected.</b></li>
+            <li>Review the constraints (Step 4) and consider adjusting budget or time allocations.</li>
+            <li>Re-evaluate the mitigation strategy costs and implementation times.</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.markdown("</div>", unsafe_allow_html=True)
     
