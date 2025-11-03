@@ -107,7 +107,7 @@ st.markdown("""
 }
 
 .error-box {
-    background-color: #fff5f5;
+    background-color: #fff5f5f;
     border-left: 4px solid #ff6b6b;
     padding: 1rem 1.5rem;
     border-radius: 4px;
@@ -282,7 +282,7 @@ def ml_expert_weighting(expert_data, cov_matrix=None):
     else:
         weights = lambda_values / sum_lambda
         
-    return weights, eigenvalues[max_index].real, sorted_eigenvector, lambda_values
+    return weights, eigenvalues[max_index], sorted_eigenvector, lambda_values
 
 # ==================== DFS-AHP MODEL ====================
 
@@ -316,11 +316,6 @@ def compute_dfs_ahp_weights(aggregated_matrix):
         sum_geometric_means = dfs_addition(sum_geometric_means, geometric_means[i])
     
     # Calculate reciprocal of the sum
-    # (1/O_a, 1/O_b) and (1/P_c, 1/P_d) are not standard DFS numbers.
-    # We should perform division, which is complex.
-    # A simpler approach (often used) is to defuzzify the GMs, sum them, and normalize.
-    # But sticking to the paper's fuzzy ops: We need a fuzzy reciprocal
-    # Let's assume a simplified reciprocal for normalization
     sum_O_a, sum_O_b = sum_geometric_means['O']
     sum_P_c, sum_P_d = sum_geometric_means['P']
 
@@ -374,7 +369,403 @@ def compute_dfs_qfd_scores(rc_weights, relationship_matrix):
             total = dfs_list[0]
             for k in range(1, len(dfs_list)):
                 total = dfs_addition(total, dfs_list[k])
-            scores[j] = total
+                scores[j] = total
+    
+    return scores
+
+# ==================== MILP MODEL ====================
+
+def solve_milp_optimization(ms_scores, implementation_costs, implementation_times, 
+                           saving_costs, saving_times, available_budget, available_time):
+    """Solve the MILP optimization problem using a greedy approach"""
+    n_ms = len(ms_scores)
+    
+    # Calculate a score-to-cost ratio for each strategy
+    score_cost_ratios = []
+    for i in range(n_ms):
+        # Normalize score and cost
+        norm_score = ms_scores[i] / max(ms_scores) if max(ms_scores) > 0 else 0
+        norm_cost = implementation_costs[i] / max(implementation_costs) if max(import streamlit as st
+import numpy as np
+import pandas as pd
+import io
+import math
+
+# Set page configuration
+st.set_page_config(
+    page_title="Integrated DFS-AHP-QFD-MILP Model",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for styling
+st.markdown("""
+<style>
+:root {
+    --primary: #1f77b4;
+    --secondary: #2ca02c;
+    --accent: #ff6b6b;
+    --background: #f8f9fa;
+    --card-bg: #ffffff;
+    --text: #262730;
+    --border-radius: 12px;
+    --shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.main-header {
+    font-size: 2.8rem;
+    color: var(--primary);
+    text-align: center;
+    padding: 1.5rem 0;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.section-header {
+    font-size: 1.6rem;
+    color: var(--primary);
+    border-left: 5px solid var(--secondary);
+    padding-left: 1rem;
+    margin: 2rem 0 1.5rem 0;
+    font-weight: 600;
+}
+
+.panel {
+    background-color: var(--card-bg);
+    border-radius: var(--border-radius);
+    padding: 1.8rem;
+    box-shadow: var(--shadow);
+    margin-bottom: 1.5rem;
+    border: 1px solid #e0e0e0;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.panel:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+.stButton>button {
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: white;
+    border: none;
+    padding: 0.8rem 2rem;
+    border-radius: 50px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 6px rgba(50, 50, 93, 0.11), 0 1px 3px rgba(0, 0, 0, 0.08);
+    width: 100%;
+    margin-top: 1rem;
+}
+
+.stButton>button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 7px 14px rgba(50, 50, 93, 0.1), 0 3px 6px rgba(0, 0, 0, 0.08);
+    background: linear-gradient(135deg, var(--secondary), var(--primary));
+}
+
+.instruction-box {
+    background-color: #f0f7ff;
+    border-left: 4px solid var(--primary);
+    padding: 1rem 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+    font-size: 0.95rem;
+}
+
+.success-box {
+    background-color: #f0fff4;
+    border-left: 4px solid var(--secondary);
+    padding: 1rem 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+}
+
+.warning-box {
+    background-color: #fffaf0;
+    border-left: 4px solid #ffb347;
+    padding: 1rem 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+}
+
+.error-box {
+    background-color: #fff5f5;
+    border-left: 4px solid #ff6b6b;
+    padding: 1rem 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+}
+
+.footer {
+    text-align: center;
+    margin-top: 3rem;
+    padding: 1.5rem;
+    color: #666;
+    font-size: 0.9rem;
+    border-top: 1px solid #eaeaea;
+}
+
+.logo-container {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.logo {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ==================== DFS DEFINITIONS AND OPERATIONS ====================
+
+# DFS Linguistic Scale (from Table 2 in the paper)
+dfs_linguistic_scale = {
+    'EEI': {'O': (0.50, 0.50), 'P': (0.50, 0.50)},  # Exactly Equal Importance
+    'SMI': {'O': (0.55, 0.45), 'P': (0.45, 0.55)},  # Slightly More Important
+    'WMI': {'O': (0.60, 0.40), 'P': (0.40, 0.60)},  # Weakly More Important
+    'MI': {'O': (0.65, 0.35), 'P': (0.35, 0.65)},   # More Important
+    'SMM': {'O': (0.70, 0.30), 'P': (0.30, 0.70)},  # Strongly More Important
+    'VSI': {'O': (0.75, 0.25), 'P': (0.25, 0.75)},  # Very Strongly More Important
+    'AMI': {'O': (0.80, 0.20), 'P': (0.20, 0.80)},  # Absolutely More Important
+    'PMI': {'O': (0.85, 0.15), 'P': (0.15, 0.85)},  # Perfectly More Important
+    'EMI': {'O': (0.90, 0.10), 'P': (0.10, 0.90)},  # Exactly More Important
+}
+
+linguistic_options = list(dfs_linguistic_scale.keys())
+
+# DFS Operations (from Definitions 2 and 3)
+def dfs_addition(dfs1, dfs2):
+    """DFS addition operation"""
+    O_a1, O_b1 = dfs1['O']
+    O_a2, O_b2 = dfs2['O']
+    P_c1, P_d1 = dfs1['P']
+    P_c2, P_d2 = dfs2['P']
+    
+    O_a = O_a1 + O_a2 - 2 * O_a1 * O_a2
+    if O_a1 * O_a2 != 1:
+        O_a /= (1 - O_a1 * O_a2)
+    
+    O_b = (O_b1 * O_b2) / (O_b1 + O_b2 - O_b1 * O_b2) if (O_b1 + O_b2 - O_b1 * O_b2) != 0 else 0
+    
+    P_c = P_c1 + P_c2 - P_c1 * P_c2
+    P_d = P_d1 * P_d2
+    
+    return {'O': (O_a, O_b), 'P': (P_c, P_d)}
+
+def dfs_multiplication(dfs1, dfs2):
+    """DFS multiplication operation"""
+    O_a1, O_b1 = dfs1['O']
+    O_a2, O_b2 = dfs2['O']
+    P_c1, P_d1 = dfs1['P']
+    P_c2, P_d2 = dfs2['P']
+    
+    O_a = O_a1 * O_a2
+    O_b = O_b1 + O_b2 - O_b1 * O_b2
+    
+    P_c = (P_c1 * P_c2) / (P_c1 + P_c2 - P_c1 * P_c2) if (P_c1 + P_c2 - P_c1 * P_c2) != 0 else 0
+    P_d = P_d1 + P_d2 - 2 * P_d1 * P_d2
+    if P_d1 * P_d2 != 1:
+        P_d /= (1 - P_d1 * P_d2)
+    
+    return {'O': (O_a, O_b), 'P': (P_c, P_d)}
+
+def dfs_dwgm(dfs_list, weights):
+    """Decomposed Weighted Geometric Mean (DWGM) operator"""
+    if len(dfs_list) != len(weights):
+        raise ValueError("DFS list and weights must have the same length")
+    
+    n = len(dfs_list)
+    
+    # Initialize products
+    O_a_product = 1.0
+    O_b_product = 1.0
+    P_c_product = 1.0
+    P_d_product = 1.0
+    
+    O_b_complement_product = 1.0
+    P_c_complement_sum = 0.0
+    
+    for i, dfs in enumerate(dfs_list):
+        O_a, O_b = dfs['O']
+        P_c, P_d = dfs['P']
+        w = weights[i]
+        
+        O_a_product *= (O_a ** w)
+        O_b_complement_product *= ((1 - O_b) ** w)
+        P_c_product *= (P_c ** w)
+        P_d_product *= (P_d ** w)
+        
+        P_c_complement_sum += (w * (1 - P_c)) / (P_c ** (n-1)) if P_c != 0 else 0
+    
+    O_b_new = 1 - O_b_complement_product
+    
+    P_c_denominator = P_c_complement_sum + P_c_product
+    P_c_new = P_c_product / P_c_denominator if P_c_denominator != 0 else 0
+    
+    P_d_numerator = sum(weights[i] * dfs_list[i]['P'][1] for i in range(n))
+    P_d_denominator = 1 + sum((weights[i] * dfs_list[i]['P'][1] - dfs_list[i]['P'][1]) / n for i in range(n))
+    P_d_new = P_d_numerator / P_d_denominator if P_d_denominator != 0 else 0
+    
+    return {'O': (O_a_product, O_b_new), 'P': (P_c_new, P_d_new)}
+
+def dfs_consistency_index(dfs):
+    """Calculate Consistency Index (CI) for DFS number"""
+    O_a, O_b = dfs['O']
+    P_c, P_d = dfs['P']
+    
+    numerator = ((O_a - P_d) ** 2 + (O_b - P_c) ** 2 + 
+                (1 - O_a - O_b) ** 2 + (1 - P_c - P_d) ** 2)
+    
+    CI = 1 - math.sqrt(numerator / 2)
+    return max(0, min(1, CI))  # Ensure between 0 and 1
+
+def dfs_defuzzification(dfs):
+    """Defuzzify DFS number to crisp value (Equation 12)"""
+    O_a, O_b = dfs['O']
+    P_c, P_d = dfs['P']
+    
+    numerator = (O_a + O_b - P_c + P_d) * dfs_consistency_index(dfs)
+    denominator = 2 * 0.9  # k = 0.9 as per the paper
+    
+    return numerator / denominator if denominator != 0 else 0
+
+# ==================== ML-BASED EXPERT WEIGHTING ====================
+
+def ml_expert_weighting(expert_data, cov_matrix=None):
+    """
+    ML-based expert weighting using PCA approach
+    expert_data: numpy array of shape (n_experts, n_features)
+    """
+    # If covariance matrix is not provided, compute it from data
+    if cov_matrix is None:
+        # Normalize the data
+        min_vals = np.min(expert_data, axis=0)
+        max_vals = np.max(expert_data, axis=0)
+        range_vals = max_vals - min_vals
+        # Avoid division by zero if a feature is constant
+        range_vals[range_vals == 0] = 1
+        expert_data_normalized = (expert_data - max_vals) / range_vals)
+        cov_matrix = np.cov(expert_data_normalized.T)
+    
+    # Eigen decomposition
+    eigenvalues, eigenvectors = np.linalg.eig(cov_matrix)
+    
+    # Select eigenvector corresponding to the maximum eigenvalue
+    max_index = np.argmax(eigenvalues)
+    principal_eigenvector = eigenvectors[:, max_index].real # Use real part
+    
+    # Sort eigenvector components in descending order
+    sorted_eigenvector = np.sort(principal_eigenvector)[::-1]
+    
+    # Project original data onto sorted eigenvector
+    lambda_values = expert_data @ sorted_eigenvector
+    
+    # Normalize to get expert weights
+    # Handle negative lambda values if they occur, e.g., by shifting
+    if np.any(lambda_values < 0):
+        lambda_values = lambda_values - np.min(lambda_values) 
+        
+    sum_lambda = np.sum(lambda_values)
+    if sum_lambda == 0:
+         # All experts are equal if sum is zero
+        weights = np.ones(len(lambda_values)) / len(lambda_values)
+    else:
+        weights = lambda_values / sum_lambda
+        
+    return weights, eigenvalues[max_index].real, sorted_eigenvector, lambda_values
+
+# ==================== DFS-AHP MODEL ====================
+
+def dfs_ahp_aggregation(pairwise_matrices, expert_weights):
+    """Aggregate DFS pairwise comparison matrices using DWGM"""
+    n_criteria = len(pairwise_matrices[0])
+    aggregated_matrix = [[None for _ in range(n_criteria)] for _ in range(n_criteria)]
+    
+    for i in range(n_criteria):
+        for j in range(n_criteria):
+            dfs_list = [matrix[i][j] for matrix in pairwise_matrices]
+            aggregated_matrix[i][j] = dfs_dwgm(dfs_list, expert_weights)
+    
+    return aggregated_matrix
+
+def compute_dfs_ahp_weights(aggregated_matrix):
+    """Compute weights from aggregated DFS pairwise comparison matrix"""
+    n = len(aggregated_matrix)
+    
+    # Compute geometric mean for each row using DWGM with equal weights
+    geometric_means = []
+    equal_weights = [1/n] * n
+    
+    for i in range(n):
+        dfs_list = [aggregated_matrix[i][j] for j in range(n)]
+        geometric_means.append(dfs_dwgm(dfs_list, equal_weights))
+    
+    # Sum of geometric means
+    sum_geometric_means = geometric_means[0]
+    for i in range(1, n):
+        sum_geometric_means = dfs_addition(sum_geometric_means, geometric_means[i])
+    
+    # Calculate reciprocal of the sum
+    sum_O_a, sum_O_b = sum_geometric_means['O']
+    sum_P_c, sum_P_d = sum_geometric_means['P']
+
+    # Simplified reciprocal (this is an approximation, real fuzzy division is complex)
+    reciprocal_sum = {
+        'O': (1/sum_O_a if sum_O_a != 0 else 0, 1/sum_O_b if sum_O_b != 0 else 0),
+        'P': (1/sum_P_c if sum_P_c != 0 else 0, 1/sum_P_d if sum_P_d != 0 else 0)
+    }
+
+    # Normalize weights
+    weights = []
+    for i in range(n):
+        weight = dfs_multiplication(geometric_means[i], reciprocal_sum)
+        weights.append(weight)
+    
+    return weights
+
+# ==================== DFS-QFD MODEL ====================
+
+def dfs_qfd_relationship_matrix(relationships, expert_weights):
+    """Aggregate DFS relationship matrices using DWGM"""
+    n_rcs = len(relationships[0])
+    n_mss = len(relationships[0][0])
+    
+    aggregated_matrix = [[None for _ in range(n_mss)] for _ in range(n_rcs)]
+    
+    for i in range(n_rcs):
+        for j in range(n_mss):
+            dfs_list = [expert_matrix[i][j] for expert_matrix in relationships]
+            aggregated_matrix[i][j] = dfs_dwgm(dfs_list, expert_weights)
+    
+    return aggregated_matrix
+
+def compute_dfs_qfd_scores(rc_weights, relationship_matrix):
+    """Compute DFS scores for mitigation strategies"""
+    n_rcs = len(rc_weights)
+    n_mss = len(relationship_matrix[0])
+    
+    scores = [None] * n_mss
+    
+    for j in range(n_mss):
+        dfs_list = []
+        
+        for i in range(n_rcs):
+            # Multiply RC weight by relationship strength
+            product = dfs_multiplication(rc_weights[i], relationship_matrix[i][j])
+            dfs_list.append(product)
+        
+        # Sum the products using addition operation
+        if dfs_list:
+            total = dfs_list[0]
+            for k in range(1, len(dfs_list)):
+                total = dfs_addition(total, dfs_list[k])
+                scores[j] = total
     
     return scores
 
@@ -436,7 +827,6 @@ def main():
     <p style="font-size: 1.1rem;">This application implements an integrated decision support system with four modules:
     ML-based Expert Weighting, Decomposed Fuzzy AHP, Decomposed Fuzzy QFD, and MILP Optimization.
     </p>
-    </div>
     """, unsafe_allow_html=True)
     
     # Initialize session state
@@ -462,7 +852,7 @@ def main():
     
     # Progress bar
     progress = (st.session_state.current_step) / len(steps)
-    st.progress(progress, text=f"Step {st.session_state.current_step}/{len(steps)}: {steps[current_step-1]}")
+    st.write(f"**Current Step: {steps[current_step-1]}**")
     
     # Step 1: ML-Based Expert Weighting
     if current_step == 1:
@@ -510,7 +900,7 @@ def step1_ml_expert_weighting():
         expert_data = np.array([
             [43.5, 19, 56500, 3, 4, 3, 9, 10, 3, 1000],  # Ex1
             [40.5, 16.5, 65000, 2, 3, 2, 8, 13, 2, 1000],  # Ex2
-            [34.0, 11.0, 35500, 1, 3, 2, 3, 4, 3, 900],   # Ex3
+            [34.0, 11.0, 35500, 1, 3, 2, 3, 3, 4, 3, 900],   # Ex3
             [38.0, 13.0, 45000, 2, 1, 2, 7, 5, 1, 500]    # Ex4
         ])
         
@@ -518,14 +908,14 @@ def step1_ml_expert_weighting():
         cov_matrix = np.array([
             [0.1343, 0.1390, 0.1153, 0.1250, 0.0570, 0.1184, 0.1338, 0.1155, 0.0066, 0.0526],
             [0.1390, 0.1492, 0.1237, 0.1250, 0.0820, 0.1289, 0.1322, 0.1302, 0.0332, 0.0828],
-            [0.1153, 0.1237, 0.1441, 0.0890, 0.0480, 0.0508, 0.1222, 0.1516, -0.0148, 0.0720],
-            [0.1250, 0.1250, 0.0890, 0.1250, 0.0417, 0.1250, 0.1250, 0.0833, 0.0000, 0.0250],
-            [0.0570, 0.0820, 0.0480, 0.0417, 0.1319, 0.1042, 0.0243, 0.0741, 0.1354, 0.1417],
-            [0.1184, 0.1289, 0.0508, 0.1250, 0.1042, 0.1875, 0.0938, 0.0556, 0.0938, 0.0750],
-            [0.1338, 0.1322, 0.1222, 0.1250, 0.0243, 0.0938, 0.1157, -0.0365, 0.0208],
-            [0.1155, 0.1302, 0.1516, 0.0833, 0.0741, 0.0556, 0.1157, 0.1667, 0.0139, 0.1056],
-            [0.0066, 0.0332, -0.0148, 0.0000, 0.1354, 0.0938, -0.0365, 0.0139, 0.1719, 0.1375],
-            [0.0526, 0.0828, 0.0720, 0.0250, 0.1417, 0.0750, 0.0208, 0.1056, 0.1375, 0.1700]
+            [0.1153, 0.1237, 0.1441, 0.0890, 0.0480, 0.0508, -0.0148, 0.0720],
+            [0.1250, 0.1250, 0.0890, 0.0833, 0.0417, 0.0250],
+            [0.0570, 0.0820, 0.0480, 0.1319, 0.1042, 0.0243, 0.0741, 0.1354, 0.1417],
+            [0.1184, 0.1289, 0.0508, 0.0938, 0.0556, 0.0750],
+            [0.1338, 0.1322, 0.1222, 0.1157, -0.0365, 0.0208],
+            [0.1155, 0.1302, 0.1516, 0.0139, 0.1056, 0.0139, 0.1375],
+            [0.0066, 0.0332, -0.0148, 0.1719, 0.1375],
+            [0.0526, 0.0828, 0.0720, 0.1417, 0.1700]
         ])
         
         st.success("Using default example data with 4 experts and 10 dimensional features.")
@@ -577,12 +967,12 @@ def step1_ml_expert_weighting():
                 with col1:
                     st.metric("Maximum Eigenvalue", f"{max_eigenvalue:.6f}")
                     st.write("Sorted Eigenvector Components:")
-                    st.write(sorted_eigenvector)
+                    st.dataframe(pd.Series(sorted_eigenvector), use_container_width=True)
                 
                 with col2:
                     st.write("Expert Scores and Weights:")
                     results_df = pd.DataFrame({
-                        'Expert': [f"Expert {i+1}" for i in range(len(expert_weights)],
+                        'Expert': [f"Expert {i+1}" for i in range(len(expert_weights))],
                         'λ Score': lambda_values,
                         'Weight': expert_weights
                     })
@@ -681,7 +1071,7 @@ def step2_dfs_ahp():
             )
             
             # Use data editor for pairwise comparisons
-            st.write(f"Select linguistic terms for Expert {expert_idx+1}:")
+            st.write(f"Expert {expert_idx+1} - Select linguistic terms:")
             edited_df = st.data_editor(
                 df_comparison,
                 column_config={
@@ -710,7 +1100,7 @@ def step2_dfs_ahp():
                             # For reciprocal, swap O and P
                             original = dfs_linguistic_scale[reciprocal_term]
                             expert_matrix[i][j] = {
-                                'O': original['P'], # Swap O and P
+                                'O': original['P'],
                                 'P': original['O']
                             }
                         else:
@@ -731,9 +1121,7 @@ def step2_dfs_ahp():
                 # Defuzzify weights
                 defuzzified_weights = [dfs_defuzzification(weight) for weight in rc_weights]
                 
-                # Normalize defuzzified weights
-                total_weight = sum(defuzzified_weights)
-                normalized_weights = [w/total_weight for w in defuzzified_weights] if total_weight > 0 else defuzzified_weights
+                # Normalize defuzzified_weights = [w/sum(defuzzified_weights) for w in defuzzified_weights] if sum(defuzzified_weights) > 0 else defuzzified_weights]
                 
                 # Store results
                 st.session_state.rc_weights = normalized_weights
@@ -750,8 +1138,8 @@ def step2_dfs_ahp():
                 
                 results_df = pd.DataFrame({
                     'Resilience Challenge': rc_names,
-                    'DFS Weight (O)': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f})" for w in rc_weights],
-                    'DFS Weight (P)': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f})" for w in rc_weights],
+                    'DFS Weight (O)': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f}"),
+                    'DFS Weight (P)': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f}"),
                     'CI': [dfs_consistency_index(w) for w in rc_weights],
                     'Defuzzified Weight': defuzzified_weights,
                     'Normalized Weight': normalized_weights
@@ -760,7 +1148,7 @@ def step2_dfs_ahp():
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
                 
                 # Display ranking
-                ranking_df = results_df.nlargest(n_rc, 'Normalized Weight')[['Resilience Challenge', 'Normalized Weight']]
+                ranking_df = results_df.nlargest(n_rc, 'Normalized Weight')[['Resilience Challenge', 'Normalized Weight'])]
                 ranking_df['Rank'] = range(1, len(ranking_df) + 1)
                 ranking_df = ranking_df[['Rank', 'Resilience Challenge', 'Normalized Weight']]
                 
@@ -781,8 +1169,8 @@ def step2_dfs_ahp():
                 st.rerun()
         with col2:
             if st.button("Next: Decomposed Fuzzy QFD", key="step2_next"):
-                st.session_state.current_step = 3
-                st.rerun()
+                    st.session_state.current_step = 3
+                    st.rerun()
     else:
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -814,7 +1202,6 @@ def step3_dfs_qfd():
         "Number of Mitigation Strategies",
         min_value=2,
         max_value=15,
-        value=5,
         step=1
     )
     
@@ -843,12 +1230,12 @@ def step3_dfs_qfd():
         with expert_tabs[expert_idx]:
             
             # Create relationship matrix for this expert
-            relationship_matrix = [[None for _ in range(n_ms)] for _ in range(n_rc)]
+            relationship_matrix = [[None for _ in range(n_ms)] for _ in range(n_rcs)]
             
             # Create a dataframe for input
             relationship_data = [["EEI" for _ in range(n_ms)]
-            for i in range(n_rc):
-                relationship_data.append(["EEI" for _ in range(n_ms)])
+            for i in range(n_rcs):
+                relationship_data[i].extend(["EEI" for _ in range(n_ms)])
             
             df_relationship = pd.DataFrame(
                 relationship_data,
@@ -873,7 +1260,7 @@ def step3_dfs_qfd():
             )
             
             # Convert to DFS values
-            for i in range(n_rc):
+            for i in range(n_rcs):
                 for j in range(n_ms):
                     if edited_df.iloc[i, j]:
                         relationship_matrix[i][j] = dfs_linguistic_scale[edited_df.iloc[i, j]]
@@ -923,8 +1310,8 @@ def step3_dfs_qfd():
                 
                 results_df = pd.DataFrame({
                     'Mitigation Strategy': ms_names,
-                    'DFS Score (O)': [f"({s['O'][0]:.3f}, {s['O'][1]:.3f})" for s in ms_scores_dfs],
-                    'DFS Score (P)': [f"({s['P'][0]:.3f}, {s['P'][1]:.3f})" for s in ms_scores_dfs],
+                    'DFS Score (O)': [f"({s['O'][0]:.3f}, {s['O'][1]:.3f}"),
+                    'DFS Score (P)': [f"({s['P'][0]:.3f}, {s['P'][1]:.3f}"),
                     'CI': [dfs_consistency_index(s) for s in ms_scores_dfs],
                     'AI_j Score': AI_j
                 })
@@ -932,7 +1319,7 @@ def step3_dfs_qfd():
                 st.dataframe(results_df, use_container_width=True, hide_index=True)
                 
                 # Display ranking
-                ranking_df = results_df.nlargest(n_ms, 'AI_j Score')[['Mitigation Strategy', 'AI_j Score']]
+                ranking_df = results_df.nlargest(n_ms, 'AI_j Score')[['Mitigation Strategy', 'AI_j Score'])
                 ranking_df['Rank'] = range(1, len(ranking_df) + 1)
                 ranking_df = ranking_df[['Rank', 'Mitigation Strategy', 'AI_j Score']]
                 
@@ -952,8 +1339,8 @@ def step3_dfs_qfd():
                 st.session_state.current_step = 2
                 st.rerun()
         with col2:
-            if st.button("Next: MILP Optimization", key="step3_next"):
-                st.session_state.current_step = 4
+            if st.button("Next: Decomposed Fuzzy QFD", key="step3_next"):
+                st.session_state.current_step = 3
                 st.rerun()
     else:
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1025,7 +1412,7 @@ def step4_milp_optimization():
                 f"Time for {ms_name} (months)",
                 min_value=0.0,
                 value=3.0 + i * 1.0,
-                step=0.5,
+                step=0.5
                 key=f"time_{i}"
             )
             implementation_times.append(time)
@@ -1160,6 +1547,127 @@ def step5_results_summary():
         st.subheader("Expert Weights")
         expert_df = pd.DataFrame({
             'Expert': [f"Expert {i+1}" for i in range(len(st.session_state.expert_weights)],
+            'Weight': st.session_state.expert_weights]
+        })
+        st.dataframe(expert_df, use_container_width=True, hide_index=True)
+    
+    # Resilience Challenge Weights Summary
+    if hasattr(st.session_state, 'rc_weights'):
+        st.subheader("Resilience Challenge Weights")
+        rc_df = pd.DataFrame({
+            'Resilience Challenge': st.session_state.rc_names,
+            'Weight': st.session_state.rc_weights
+        }).sort_values('Weight', ascending=False).reset_index(drop=True)
+        rc_df['Rank'] = range(1, len(rc_df) + 1)
+        st.dataframe(rc_df[['Rank', 'Resilience Challenge', 'Weight']], 
+                    use_container_width=True, hide_index=True)
+    
+    # Mitigation Strategy Scores Summary
+    if hasattr(st.session_state, 'ms_scores'):
+        st.subheader("Mitigation Strategy Scores")
+        ms_df = pd.DataFrame({
+            'Mitigation Strategy': st.session_state.ms_names,
+            'AI_j Score': st.session_state.ms_scores
+        }).sort_values('AI_j Score', ascending=False).reset_index(drop=True)
+        ms_df['Rank'] = range(1, len(ms_df) + 1)
+        st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score'])
+        st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score']], 
+                    use_container_width=True, hide_index=True)
+    
+    # MILP Optimization Results Summary
+    if hasattr(st.session_state, 'milp_results'):
+        st.subheader("Optimization Results")
+        milp_results = st.session_state.milp_results
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Resilience Score", f"{milp_results['total_score']:.2f}")
+        
+        with col2:
+            st.metric("Total Cost", f"${milp_results['total_cost']:.2f}")
+        
+        with col3:
+            st.metric("Total Time", f"{milp_results['total_time']:.1f} months")
+        
+        with col4:
+            st.metric("Selected Strategies", len(milp_results['selected_ms']))
+        
+        if milp_results['selected_ms']:
+            st.write("**Selected Mitigation Strategies:**")
+            selected_list = [st.session_state.ms_names[i] for i in milp_results['selected_ms']]
+            for i, strategy in enumerate(selected_list, 1):
+                st.write(f"{i}. {strategy}")
+            
+        else:
+            st.warning("""
+            **Recommendations:**
+            **Recommendations:**
+            - Review the constraints and consider adjusting budget or time allocations
+            - Re-evaluate the mitigation strategy costs and implementation times
+            - Consider phased implementation approach
+            """)
+    
+    # Export results
+    st.subheader("Export Results")
+    
+    if st.button("Generate Comprehensive Report"):
+        with st.spinner("Generating report..."):
+            try:
+                # Create Word document
+                doc = Document()
+                
+                # Title
+                title = doc.add_heading('Integrated DFS-AHP-QFD-MILP Analysis Report', 0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # Add content sections...
+                # (Implementation of detailed report generation would go here)
+                
+                doc_bytes = io.BytesIO()
+                doc.save(doc_bytes)
+                doc_bytes.seek(0)
+                
+                st.download_button(
+                    label="Download Report",
+                    data=doc_bytes,
+                    file_name="DFS_AHP_QFD_MILP_Report.docx",
+                    mime="application/vnd.openxmlformats.openxmlformats.openxmlformats.wordprocessingml.document';,
+                    mime="application/vnd.openxmlformats.openxml.wordprocessingml.document";, file_name="DFS_AHP_QFD_MILP_Report.docx"
+                )
+                
+            except Exception as e:
+                    st.error(f"Error generating report: {e}")
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Previous: MILP Optimization", key="step4_prev"):
+            st.session_state.current_step = 3
+            st.rerun()
+    with col2:
+        if st.button("Next: Results Summary", key="step5_next"):
+            st.session_state.current_step = 5
+            st.rerun()
+    else:
+        st.markdown("</div>", unsafe_allow_html=True)
+
+def step5_results_summary():
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
+    st.markdown('<h2 class="section-header">Step 5: Results Summary</h2>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    <div class="instruction-box">
+    <strong>Summary:</strong> This page provides a comprehensive overview of all analysis results.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Expert Weights Summary
+    if hasattr(st.session_state, 'expert_weights'):
+        st.subheader("Expert Weights")
+        expert_df = pd.DataFrame({
+            'Expert': [f"Expert {i+1}" for i in range(len(st.session_state.expert_weights)],
             'Weight': st.session_state.expert_weights
         })
         st.dataframe(expert_df, use_container_width=True, hide_index=True)
@@ -1183,8 +1691,8 @@ def step5_results_summary():
             'AI_j Score': st.session_state.ms_scores
         }).sort_values('AI_j Score', ascending=False).reset_index(drop=True)
         ms_df['Rank'] = range(1, len(ms_df) + 1)
-        st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score']], 
-                    use_container_width=True, hide_index=True)
+        st.dataframe(ms_df[['Rank', 'Mitigation Strategy', 'AI_j Score'], 
+                        use_container_width=True, hide_index=True)
     
     # MILP Optimization Results Summary
     if hasattr(st.session_state, 'milp_results'):
@@ -1203,47 +1711,64 @@ def step5_results_summary():
             st.metric("Total Time", f"{milp_results['total_time']:.1f} months")
         
         with col4:
-            st.metric("Selected Strategies", len(milp_results['selected_ms'])
+            st.metric("Selected Strategies", len(milp_results['selected_ms']))
         
         if milp_results['selected_ms']:
             st.write("**Selected Mitigation Strategies:**")
             selected_list = [st.session_state.ms_names[i] for i in milp_results['selected_ms']]
             for i, strategy in enumerate(selected_list, 1):
                 st.write(f"{i}. {strategy}")
+            
+        else:
+            st.warning("""
+            **Recommendations:**
+            **Recommendations:**
+            - Review the constraints and consider adjusting budget or time allocations
+            - Re-evaluate the mitigation strategy costs and implementation times
+            - Consider phased implementation approach
+            "")
     
-    # Recommendations
-    st.subheader("Recommendations")
+    # Export results
+    st.subheader("Export Results")
     
-    if (hasattr(st.session_state, 'milp_results') and 
-        st.session_state.milp_results['selected_ms']):
-        
-        st.success("""
-        **Implementation Priority:**
-        - Focus on implementing the <b>optimal set</b> of mitigation strategies listed above.
-        - The selection is not just based on individual scores but on the <b>best combination</b> that respects interdependencies and constraints.
-        - Monitor budget and time utilization throughout implementation.
-        """)
-    else:
-        st.warning("""
-        **Recommendations:**
-        - Review the constraints and consider adjusting budget or time allocations
-        - Re-evaluate the mitigation strategy costs and implementation times
-        - Consider phased implementation approach
-        """)
+    if st.button("Generate Comprehensive Report"):
+        with st.spinner("Generating report..."):
+            try:
+                # Create Word document
+                doc = Document()
+                
+                # Title
+                title = doc.add_heading('Integrated DFS-AHP-QFD-MILP Analysis Report', 0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # Add content sections...
+                # (Implementation of detailed report generation would go here)
+                
+                doc_bytes = io.BytesIO()
+                doc.save(doc_bytes)
+                doc_bytes.seek(0)
+                
+                st.download_button(
+                    label="Download Report",
+                    data=doc_bytes,
+                    file_name="DFS_AHP_QFD_MILP_Report.docx",
+                    mime="application/vnd.openxmlformats.wordprocessingml.document'; file_name="DFS_AHP_QFD_MILP_Report.docx",
+                    mime="application/vnd.openxmlformats.wordprocessingml.document'; file_name="DFS_AHP_QFD_MILP_Report.docx"
+                )
+                
+            except Exception as e:
+                st.error(f"Error generating report: {e}")
     
     st.markdown("</div>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Previous: MILP Optimization", key="step5_prev"):
-            st.session_state.current_step = 4
+        if st.button("Previous: MILP Optimization", key="step4_prev"):
+            st.session_state.current_step = 3
             st.rerun()
     with col2:
-        if st.button("Start New Analysis", key="step5_new"):
-            # Reset session state
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.session_state.current_step = 1
+        if st.button("Next: Results Summary", key="step5_next"):
+            st.session_state.current_step = 5
             st.rerun()
 
 if __name__ == "__main__":
