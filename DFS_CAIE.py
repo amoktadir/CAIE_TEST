@@ -1,6 +1,10 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
+import pulp
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import io
 import base64
 import math
@@ -470,26 +474,26 @@ def solve_milp_optimization(ms_scores, implementation_costs, implementation_time
     n_ms = len(ms_scores)
     
     # Create the problem
-    prob = pl.LpProblem("MS_Selection", pl.LpMaximize)
+    prob = pulp.LpProblem("MS_Selection", pulp.LpMaximize)
     
     # Decision variables
-    x = [pl.LpVariable(f"x_{j}", cat='Binary') for j in range(n_ms)]
+    x = [pulp.LpVariable(f"x_{j}", cat='Binary') for j in range(n_ms)]
     y = {}
     for i in range(n_ms):
         for j in range(i+1, n_ms):
-            y[(i,j)] = pl.LpVariable(f"y_{i}_{j}", cat='Binary')
+            y[(i,j)] = pulp.LpVariable(f"y_{i}_{j}", cat='Binary')
     
     # Objective function
-    prob += pl.lpSum(ms_scores[j] * x[j] for j in range(n_ms))
+    prob += pulp.lpSum(ms_scores[j] * x[j] for j in range(n_ms))
     
     # Budget constraint
-    budget_constraint = pl.lpSum(implementation_costs[j] * x[j] for j in range(n_ms)) - \
-                      pl.lpSum(saving_costs[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
+    budget_constraint = pulp.lpSum(implementation_costs[j] * x[j] for j in range(n_ms)) - \
+                      pulp.lpSum(saving_costs[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
     prob += budget_constraint <= available_budget
     
     # Time constraint
-    time_constraint = pl.lpSum(implementation_times[j] * x[j] for j in range(n_ms)) - \
-                    pl.lpSum(saving_times[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
+    time_constraint = pulp.lpSum(implementation_times[j] * x[j] for j in range(n_ms)) - \
+                    pulp.lpSum(saving_times[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
     prob += time_constraint <= available_time
     
     # Linearization constraints
@@ -503,8 +507,8 @@ def solve_milp_optimization(ms_scores, implementation_costs, implementation_time
     prob.solve()
     
     # Extract results
-    selected_ms = [j for j in range(n_ms) if pl.value(x[j]) == 1]
-    total_score = pl.value(prob.objective)
+    selected_ms = [j for j in range(n_ms) if pulp.value(x[j]) == 1]
+    total_score = pulp.value(prob.objective)
     total_cost = sum(implementation_costs[j] for j in selected_ms) - \
                 sum(saving_costs[i][j] for i in range(n_ms) for j in range(i+1, n_ms) 
                 if (i in selected_ms and j in selected_ms))
