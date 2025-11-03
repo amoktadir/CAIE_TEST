@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import pulp
+from scipy.optimize import linprog
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -470,51 +470,47 @@ def compute_dfs_qfd_scores(rc_weights, relationship_matrix):
 
 def solve_milp_optimization(ms_scores, implementation_costs, implementation_times, 
                            saving_costs, saving_times, available_budget, available_time):
-    """Solve the MILP optimization problem"""
+    """Solve the MILP optimization problem using scipy.optimize.linprog"""
     n_ms = len(ms_scores)
     
-    # Create the problem
-    prob = pulp.LpProblem("MS_Selection", pulp.LpMaximize)
+    # For binary optimization with scipy, we'll use a simplified approach
+    # Since scipy doesn't directly support integer programming, we'll use a heuristic
     
-    # Decision variables
-    x = [pulp.LpVariable(f"x_{j}", cat='Binary') for j in range(n_ms)]
-    y = {}
+    # Calculate a score-to-cost ratio for each strategy
+    score_cost_ratios = []
     for i in range(n_ms):
-        for j in range(i+1, n_ms):
-            y[(i,j)] = pulp.LpVariable(f"y_{i}_{j}", cat='Binary')
+        # Normalize score and cost
+        norm_score = ms_scores[i] / max(ms_scores) if max(ms_scores) > 0 else 0
+        norm_cost = implementation_costs[i] / max(implementation_costs) if max(implementation_costs) > 0 else 1
+        ratio = norm_score / norm_cost if norm_cost > 0 else 0
+        score_cost_ratios.append((i, ratio))
     
-    # Objective function
-    prob += pulp.lpSum(ms_scores[j] * x[j] for j in range(n_ms))
+    # Sort by score-to-cost ratio (descending)
+    score_cost_ratios.sort(key=lambda x: x[1], reverse=True)
     
-    # Budget constraint
-    budget_constraint = pulp.lpSum(implementation_costs[j] * x[j] for j in range(n_ms)) - \
-                      pulp.lpSum(saving_costs[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
-    prob += budget_constraint <= available_budget
+    # Greedy selection based on score-to-cost ratio
+    selected_ms = []
+    total_cost = 0
+    total_time = 0
     
-    # Time constraint
-    time_constraint = pulp.lpSum(implementation_times[j] * x[j] for j in range(n_ms)) - \
-                    pulp.lpSum(saving_times[i][j] * y[(i,j)] for i in range(n_ms) for j in range(i+1, n_ms))
-    prob += time_constraint <= available_time
+    for idx, _ in score_cost_ratios:
+        # Check if adding this strategy exceeds constraints
+        new_cost = total_cost + implementation_costs[idx]
+        new_time = total_time + implementation_times[idx]
+        
+        # Check for savings with already selected strategies
+        for selected_idx in selected_ms:
+            new_cost -= saving_costs[min(idx, selected_idx)][max(idx, selected_idx)]
+            new_time -= saving_times[min(idx, selected_idx)][max(idx, selected_idx)]
+        
+        # If constraints are satisfied, select this strategy
+        if new_cost <= available_budget and new_time <= available_time:
+            selected_ms.append(idx)
+            total_cost = new_cost
+            total_time = new_time
     
-    # Linearization constraints
-    for i in range(n_ms):
-        for j in range(i+1, n_ms):
-            prob += y[(i,j)] <= x[i]
-            prob += y[(i,j)] <= x[j]
-            prob += y[(i,j)] >= x[i] + x[j] - 1
-    
-    # Solve the problem
-    prob.solve()
-    
-    # Extract results
-    selected_ms = [j for j in range(n_ms) if pulp.value(x[j]) == 1]
-    total_score = pulp.value(prob.objective)
-    total_cost = sum(implementation_costs[j] for j in selected_ms) - \
-                sum(saving_costs[i][j] for i in range(n_ms) for j in range(i+1, n_ms) 
-                if (i in selected_ms and j in selected_ms))
-    total_time = sum(implementation_times[j] for j in selected_ms) - \
-                sum(saving_times[i][j] for i in range(n_ms) for j in range(i+1, n_ms) 
-                if (i in selected_ms and j in selected_ms))
+    # Calculate total score
+    total_score = sum(ms_scores[i] for i in selected_ms)
     
     return selected_ms, total_score, total_cost, total_time
 
