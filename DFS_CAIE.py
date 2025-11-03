@@ -2,11 +2,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 from scipy.optimize import linprog
-from docx import Document
-from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 import io
-import base64
 import math
 
 # Set page configuration
@@ -67,38 +63,6 @@ st.markdown("""
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
-.metric-card {
-    background: linear-gradient(135deg, var(--card-bg), #f7f9fc);
-    border-radius: var(--border-radius);
-    padding: 1.5rem;
-    box-shadow: var(--shadow);
-    text-align: center;
-    border: 1px solid #e8e8e8;
-    height: 100%;
-}
-
-.metric-value {
-    font-size: 2rem;
-    font-weight: 700;
-    color: var(--primary);
-    margin: 0.5rem 0;
-}
-
-.metric-label {
-    font-size: 0.9rem;
-    color: #666;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.result-table {
-    background-color: var(--card-bg);
-    border-radius: var(--border-radius);
-    padding: 1.5rem;
-    box-shadow: var(--shadow);
-    margin: 1.5rem 0;
-}
-
 .stButton>button {
     background: linear-gradient(135deg, var(--primary), var(--secondary));
     color: white;
@@ -149,15 +113,6 @@ st.markdown("""
     padding: 1rem 1.5rem;
     border-radius: 4px;
     margin: 1rem 0;
-}
-
-.footer {
-    text-align: center;
-    margin-top: 3rem;
-    padding: 1.5rem;
-    color: #666;
-    font-size: 0.9rem;
-    border-top: 1px solid #eaeaea;
 }
 
 .logo-container {
@@ -225,32 +180,6 @@ def dfs_multiplication(dfs1, dfs2):
     
     return {'O': (O_a, O_b), 'P': (P_c, P_d)}
 
-def dfs_scalar_multiplication(dfs, scalar):
-    """DFS multiplication by scalar"""
-    O_a, O_b = dfs['O']
-    P_c, P_d = dfs['P']
-    
-    O_a_new = (scalar * O_a) / ((scalar - 1) * O_a + 1) if ((scalar - 1) * O_a + 1) != 0 else 0
-    O_b_new = O_b / (scalar - (scalar - 1) * O_b) if (scalar - (scalar - 1) * O_b) != 0 else 0
-    
-    P_c_new = 1 - (1 - P_c) ** scalar
-    P_d_new = P_d ** scalar
-    
-    return {'O': (O_a_new, O_b_new), 'P': (P_c_new, P_d_new)}
-
-def dfs_power(dfs, power):
-    """DFS power operation"""
-    O_a, O_b = dfs['O']
-    P_c, P_d = dfs['P']
-    
-    O_a_new = O_a ** power
-    O_b_new = 1 - (1 - O_b) ** power
-    
-    P_c_new = P_c / (power - (power - 1) * P_c) if (power - (power - 1) * P_c) != 0 else 0
-    P_d_new = (power * P_d) / ((power - 1) * P_d + 1) if ((power - 1) * P_d + 1) != 0 else 0
-    
-    return {'O': (O_a_new, O_b_new), 'P': (P_c_new, P_d_new)}
-
 def dfs_dwgm(dfs_list, weights):
     """Decomposed Weighted Geometric Mean (DWGM) operator"""
     if len(dfs_list) != len(weights):
@@ -301,17 +230,6 @@ def dfs_consistency_index(dfs):
     CI = 1 - math.sqrt(numerator / 2)
     return max(0, min(1, CI))  # Ensure between 0 and 1
 
-def dfs_score_index(dfs, k=0.9):
-    """Calculate Score Index (SI) for DFS number"""
-    O_a, O_b = dfs['O']
-    P_c, P_d = dfs['P']
-    
-    CI = dfs_consistency_index(dfs)
-    numerator = (O_a + O_b - P_c + P_d) * CI
-    
-    SI = numerator / (2 * k)
-    return max(0, SI)  # Ensure non-negative
-
 def dfs_defuzzification(dfs):
     """Defuzzify DFS number to crisp value (Equation 12)"""
     O_a, O_b = dfs['O']
@@ -355,33 +273,6 @@ def ml_expert_weighting(expert_data, cov_matrix=None):
     return weights, eigenvalues[max_index], sorted_eigenvector, lambda_values
 
 # ==================== DFS-AHP MODEL ====================
-
-def compute_eigenvector(matrix):
-    """Compute principal eigenvector of a matrix"""
-    eigenvalues, eigenvectors = np.linalg.eig(matrix)
-    max_index = np.argmax(eigenvalues)
-    return eigenvectors[:, max_index].real
-
-def compute_consistency_ratio(matrix):
-    """Compute Consistency Ratio for AHP matrix"""
-    n = matrix.shape[0]
-    
-    # Compute eigenvalues
-    eigenvalues, _ = np.linalg.eig(matrix)
-    lambda_max = max(eigenvalues.real)
-    
-    # Compute Consistency Index
-    CI = (lambda_max - n) / (n - 1)
-    
-    # Random Index values (for n up to 15)
-    RI_dict = {1: 0, 2: 0, 3: 0.58, 4: 0.90, 5: 1.12, 6: 1.24, 7: 1.32, 
-               8: 1.41, 9: 1.45, 10: 1.49, 11: 1.51, 12: 1.48, 13: 1.56, 
-               14: 1.57, 15: 1.59}
-    
-    RI = RI_dict.get(n, 1.59)
-    CR = CI / RI if RI != 0 else float('inf')
-    
-    return CR, CI, lambda_max
 
 def dfs_ahp_aggregation(pairwise_matrices, expert_weights):
     """Aggregate DFS pairwise comparison matrices using DWGM"""
@@ -470,11 +361,8 @@ def compute_dfs_qfd_scores(rc_weights, relationship_matrix):
 
 def solve_milp_optimization(ms_scores, implementation_costs, implementation_times, 
                            saving_costs, saving_times, available_budget, available_time):
-    """Solve the MILP optimization problem using scipy.optimize.linprog"""
+    """Solve the MILP optimization problem using a greedy approach"""
     n_ms = len(ms_scores)
-    
-    # For binary optimization with scipy, we'll use a simplified approach
-    # Since scipy doesn't directly support integer programming, we'll use a heuristic
     
     # Calculate a score-to-cost ratio for each strategy
     score_cost_ratios = []
@@ -1298,36 +1186,6 @@ def step5_results_summary():
         - Re-evaluate the mitigation strategy costs and implementation times
         - Consider phased implementation approach
         """)
-    
-    # Export results
-    st.subheader("Export Results")
-    
-    if st.button("Generate Comprehensive Report"):
-        with st.spinner("Generating report..."):
-            try:
-                # Create Word document
-                doc = Document()
-                
-                # Title
-                title = doc.add_heading('Integrated DFS-AHP-QFD-MILP Analysis Report', 0)
-                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                
-                # Add content sections...
-                # (Implementation of detailed report generation would go here)
-                
-                doc_bytes = io.BytesIO()
-                doc.save(doc_bytes)
-                doc_bytes.seek(0)
-                
-                st.download_button(
-                    label="Download Report",
-                    data=doc_bytes,
-                    file_name="DFS_AHP_QFD_MILP_Report.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-                
-            except Exception as e:
-                st.error(f"Error generating report: {e}")
     
     st.markdown("</div>", unsafe_allow_html=True)
     
