@@ -1310,8 +1310,8 @@ def step3_dfs_qfd():
                 
                 results_df = pd.DataFrame({
                     'Mitigation Strategy': ms_names,
-                    'DFS Score (O)': [f"({s['O'][0]:.3f}, {s['O'][1]:.3f}"),
-                    'DFS Score (P)': [f"({s['P'][0]:.3f}, {s['P'][1]:.3f}"),
+                    'DFS Score (O)': [f"({s['O'][0]:.3f}, {s['O'][1]:.3f}"],
+                    'DFS Score (P)': [f"({s['P'][0]:.3f}, {s['P'][1]:.3f}"],
                     'CI': [dfs_consistency_index(s) for s in ms_scores_dfs],
                     'AI_j Score': AI_j
                 })
