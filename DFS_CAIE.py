@@ -1,9 +1,6 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from docx import Document
-from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 import io
 import base64
 import math
