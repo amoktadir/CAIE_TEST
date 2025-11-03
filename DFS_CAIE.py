@@ -3,8 +3,7 @@ import numpy as np
 import pandas as pd
 import io
 import math
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+
 
 # Set page configuration
 st.set_page_config(
