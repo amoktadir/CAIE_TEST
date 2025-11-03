@@ -1138,8 +1138,8 @@ def step2_dfs_ahp():
                 
                 results_df = pd.DataFrame({
                     'Resilience Challenge': rc_names,
-                    'DFS Weight (O)': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f}"),
-                    'DFS Weight (P)': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f}"),
+                    'DFS Weight (O)': [f"({w['O'][0]:.3f}, {w['O'][1]:.3f}"],
+                    'DFS Weight (P)': [f"({w['P'][0]:.3f}, {w['P'][1]:.3f}"],
                     'CI': [dfs_consistency_index(w) for w in rc_weights],
                     'Defuzzified Weight': defuzzified_weights,
                     'Normalized Weight': normalized_weights
