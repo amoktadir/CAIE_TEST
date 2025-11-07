@@ -86,7 +86,7 @@ def main():
     st.sidebar.title("Navigation")
     app_section = st.sidebar.radio(
         "Select Section:",
-        ["Introduction", "Linguistic Scale", "Pairwise Comparisons", "Aggregation & Results"]
+        ["Introduction", "Linguistic Scale", "Pairwise Comparisons", "Aggregation & Results", "Example Data"]
     )
     
     if app_section == "Introduction":
@@ -96,6 +96,17 @@ def main():
         
         DFS is the latest extension of intuitionistic fuzzy sets that captures uncertainty and vagueness 
         by allowing experts to express preferences in both optimistic and pessimistic terms.
+        
+        ### Key Features:
+        - **Membership Degree (μ)**: Degree of belongingness
+        - **Non-membership Degree (ν)**: Degree of non-belongingness
+        - **Optimistic Set**: Represents best-case scenario preferences
+        - **Pessimistic Set**: Represents worst-case scenario preferences
+        
+        ### DFS-AHP Process:
+        1. **Phase I**: Pairwise comparisons using DFS linguistic scale with both optimistic and pessimistic ratings
+        2. **Phase II**: Weight aggregation and defuzzification using DWGM operator
+        3. **Consistency Check**: Ensuring logical consistency of judgments
         """)
         
     elif app_section == "Linguistic Scale":
@@ -116,10 +127,19 @@ def main():
         scale_df = pd.DataFrame(scale_data)
         st.dataframe(scale_df, use_container_width=True)
         
+        # Explanation
+        st.markdown("""
+        ### Legend:
+        - **μ_O**: Optimistic membership degree
+        - **ν_O**: Optimistic non-membership degree  
+        - **μ_P**: Pessimistic membership degree
+        - **ν_P**: Pessimistic non-membership degree
+        """)
+        
     elif app_section == "Pairwise Comparisons":
         st.header("⚖️ Pairwise Comparisons")
         
-        col1, col2 = st.columns([1, 2])
+        col1, col2 = st.columns([1, 3])
         
         with col1:
             st.subheader("Setup")
@@ -135,7 +155,7 @@ def main():
         
         with col2:
             st.subheader("Pairwise Comparison Matrix")
-            st.info("Select linguistic terms for each pairwise comparison")
+            st.info("Select both optimistic (O) and pessimistic (P) linguistic terms for each pairwise comparison")
             
             # Initialize session state for storing comparisons
             if 'comparisons' not in st.session_state:
@@ -145,34 +165,52 @@ def main():
             for expert in range(num_experts):
                 st.markdown(f"### Expert {expert + 1}")
                 
+                # Create header row
+                header_cols = st.columns(num_criteria * 2 + 1)
+                header_cols[0].write("**Criteria**")
+                for j in range(num_criteria):
+                    header_cols[j*2 + 1].write(f"**{criteria_names[j]} (O)**")
+                    header_cols[j*2 + 2].write(f"**{criteria_names[j]} (P)**")
+                
                 # Create comparison matrix
                 comparison_matrix = []
                 for i in range(num_criteria):
-                    row = []
-                    cols = st.columns(num_criteria + 1)
+                    row_comparisons = []
+                    cols = st.columns(num_criteria * 2 + 1)
                     cols[0].write(f"**{criteria_names[i]}**")
                     
                     for j in range(num_criteria):
                         if i == j:
-                            row.append('EEI')
-                            cols[j+1].write("EEI")
+                            # Diagonal elements - always EEI for both O and P
+                            row_comparisons.append({'O': 'EEI', 'P': 'EEI'})
+                            cols[j*2 + 1].write("EEI")
+                            cols[j*2 + 2].write("EEI")
                         else:
-                            # Get available terms (optimistic for upper triangle, pessimistic for lower)
-                            available_terms = list(dfs_ahp.dfs_scale.keys())
-                            if i < j:
-                                # Upper triangle - optimistic terms
-                                available_terms = [t for t in available_terms if t in ['EMI', 'PMI', 'AMI', 'VSI', 'StMI', 'MI', 'WMI', 'SMI', 'EEI']]
-                            else:
-                                # Lower triangle - pessimistic terms  
-                                available_terms = [t for t in available_terms if t in ['EMU', 'PMU', 'AMU', 'VSU', 'StMU', 'MU', 'WMU', 'SMU', 'EEU']]
+                            # Non-diagonal elements - allow selection of both O and P
+                            optimistic_terms = ['EMI', 'PMI', 'AMI', 'VSI', 'StMI', 'MI', 'WMI', 'SMI', 'EEI']
+                            pessimistic_terms = ['EMU', 'PMU', 'AMU', 'VSU', 'StMU', 'MU', 'WMU', 'SMU', 'EEU']
                             
-                            selected_term = cols[j+1].selectbox(
-                                f"{criteria_names[i]} vs {criteria_names[j]}",
-                                available_terms,
-                                key=f"expert_{expert}_{i}_{j}"
+                            # Default values
+                            default_O = 'EEI' if i < j else 'EEU'
+                            default_P = 'EEU' if i < j else 'EEI'
+                            
+                            selected_O = cols[j*2 + 1].selectbox(
+                                f"O: {criteria_names[i]} vs {criteria_names[j]}",
+                                optimistic_terms,
+                                index=optimistic_terms.index(default_O),
+                                key=f"expert_{expert}_{i}_{j}_O"
                             )
-                            row.append(selected_term)
-                    comparison_matrix.append(row)
+                            
+                            selected_P = cols[j*2 + 2].selectbox(
+                                f"P: {criteria_names[i]} vs {criteria_names[j]}",
+                                pessimistic_terms,
+                                index=pessimistic_terms.index(default_P),
+                                key=f"expert_{expert}_{i}_{j}_P"
+                            )
+                            
+                            row_comparisons.append({'O': selected_O, 'P': selected_P})
+                    
+                    comparison_matrix.append(row_comparisons)
                 
                 st.session_state.comparisons[f'expert_{expert}'] = {
                     'matrix': comparison_matrix,
@@ -226,9 +264,19 @@ def main():
                     for i in range(num_criteria):
                         criterion_comparisons = []
                         for j in range(num_criteria):
-                            term = comparison_matrix[i][j]
-                            dfs_value = dfs_ahp.get_dfs_value(term)
-                            criterion_comparisons.append(dfs_value)
+                            comparison = comparison_matrix[i][j]
+                            # Get both optimistic and pessimistic DFS values
+                            dfs_value_O = dfs_ahp.get_dfs_value(comparison['O'])
+                            dfs_value_P = dfs_ahp.get_dfs_value(comparison['P'])
+                            
+                            # Combine into single DFS representation
+                            combined_dfs = {
+                                'mu_O': dfs_value_O['mu_O'],
+                                'nu_O': dfs_value_O['nu_O'],
+                                'mu_P': dfs_value_P['mu_P'],
+                                'nu_P': dfs_value_P['nu_P']
+                            }
+                            criterion_comparisons.append(combined_dfs)
                         criterion_dfs_values.append(criterion_comparisons)
                     
                     # Calculate weights for this expert using DWGM
@@ -287,7 +335,7 @@ def main():
                 
                 st.dataframe(results_df, use_container_width=True)
                 
-                # Visualization using Streamlit native charts
+                # Visualization
                 st.subheader("Visualization")
                 
                 # Bar chart using Streamlit native
@@ -303,6 +351,48 @@ def main():
                             value=f"{row['Weight']:.3f}",
                             delta=f"Rank: {row['Rank']}"
                         )
+                
+                # Show consistency information
+                st.subheader("Consistency Analysis")
+                st.info("Consistency Index (CI) and Score Index (SI) calculations would be implemented here based on Eqs. (13) and (14)")
+    
+    elif app_section == "Example Data":
+        st.header("📋 Example Data from Document")
+        
+        st.markdown("""
+        ### Table S7: Experts feedback in DFS scale for base scenario (S1)
+        
+        This table shows the proper format for collecting both optimistic (O) and pessimistic (P) ratings.
+        """)
+        
+        # Create example data structure
+        example_criteria = ['RC1', 'RC2', 'RC3', 'RC4', 'RC5', 'RC6', 'RC7', 'RC8', 'RC9']
+        
+        # Sample data from the document
+        example_matrix = [
+            # RC1 row
+            [{'O': 'EEI', 'P': 'EEI'}, {'O': 'EEI', 'P': 'EEU'}, {'O': 'MI', 'P': 'MU'}, 
+             {'O': 'StMI', 'P': 'AMU'}, {'O': 'VSI', 'P': 'VSU'}, {'O': 'WMI', 'P': 'WMU'},
+             {'O': 'SMI', 'P': 'SMU'}, {'O': 'VSI', 'P': 'VSU'}, {'O': 'EMI', 'P': 'EMU'}],
+            # RC2 row
+            [{'O': 'EEU', 'P': 'EEI'}, {'O': 'EEI', 'P': 'EEI'}, {'O': 'SMI', 'P': 'WMU'},
+             {'O': 'MI', 'P': 'MU'}, {'O': 'StMI', 'P': 'StMU'}, {'O': 'SMI', 'P': 'MU'},
+             {'O': 'SMI', 'P': 'SMU'}, {'O': 'VSI', 'P': 'VSU'}, {'O': 'PMI', 'P': 'PMU'}],
+            # Add more rows as needed...
+        ]
+        
+        # Display instructions
+        st.markdown("""
+        ### Proper Data Collection Format:
+        
+        For each pairwise comparison between criteria, experts should provide:
+        - **Optimistic (O) rating**: How important the row criterion is compared to column criterion in optimistic scenario
+        - **Pessimistic (P) rating**: How important the row criterion is compared to column criterion in pessimistic scenario
+        
+        ### Example Interpretation:
+        - **RC1 vs RC2**: O=EEI (Exactly Equal Importance), P=EEU (Exactly Equal Unimportance)
+        - **RC1 vs RC3**: O=MI (More Important), P=MU (More Unimportant)
+        """)
 
 if __name__ == "__main__":
     main()
