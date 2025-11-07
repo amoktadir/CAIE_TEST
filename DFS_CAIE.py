@@ -70,26 +70,6 @@ class DecomposedFuzzyAHP:
         
         return (mu_O + mu_P - nu_O - nu_P + 1) / 3
 
-    def calculate_consistency_index(self, dfs_number):
-        """Calculate Consistency Index using Eq. (13)"""
-        mu_O = dfs_number['mu_O']
-        nu_O = dfs_number['nu_O']
-        mu_P = dfs_number['mu_P']
-        nu_P = dfs_number['nu_P']
-        
-        CI = (mu_O + mu_P - nu_O - nu_P) / 2
-        return CI
-
-    def calculate_score_index(self, dfs_number, linguistic_multiplier=0.9):
-        """Calculate Score Index using Eq. (14)"""
-        mu_O = dfs_number['mu_O']
-        nu_O = dfs_number['nu_O']
-        mu_P = dfs_number['mu_P']
-        nu_P = dfs_number['nu_P']
-        
-        SI = (mu_O + mu_P) * linguistic_multiplier + (1 - nu_O - nu_P) * (1 - linguistic_multiplier)
-        return SI
-
 def main():
     st.set_page_config(page_title="Decomposed Fuzzy AHP", layout="wide")
     
@@ -106,7 +86,7 @@ def main():
     st.sidebar.title("Navigation")
     app_section = st.sidebar.radio(
         "Select Section:",
-        ["Introduction", "Linguistic Scale", "Pairwise Comparisons", "Aggregation & Results", "Example Data"]
+        ["Introduction", "Linguistic Scale", "Pairwise Comparisons", "Aggregation & Results"]
     )
     
     if app_section == "Introduction":
@@ -116,17 +96,6 @@ def main():
         
         DFS is the latest extension of intuitionistic fuzzy sets that captures uncertainty and vagueness 
         by allowing experts to express preferences in both optimistic and pessimistic terms.
-        
-        ### Key Features:
-        - **Membership Degree (μ)**: Degree of belongingness
-        - **Non-membership Degree (ν)**: Degree of non-belongingness
-        - **Optimistic Set**: Represents best-case scenario preferences
-        - **Pessimistic Set**: Represents worst-case scenario preferences
-        
-        ### DFS-AHP Process:
-        1. **Phase I**: Pairwise comparisons using DFS linguistic scale
-        2. **Phase II**: Weight aggregation and defuzzification using DWGM operator
-        3. **Consistency Check**: Ensuring logical consistency of judgments
         """)
         
     elif app_section == "Linguistic Scale":
@@ -146,15 +115,6 @@ def main():
         
         scale_df = pd.DataFrame(scale_data)
         st.dataframe(scale_df, use_container_width=True)
-        
-        # Explanation
-        st.markdown("""
-        ### Legend:
-        - **μ_O**: Optimistic membership degree
-        - **ν_O**: Optimistic non-membership degree  
-        - **μ_P**: Pessimistic membership degree
-        - **ν_P**: Pessimistic non-membership degree
-        """)
         
     elif app_section == "Pairwise Comparisons":
         st.header("⚖️ Pairwise Comparisons")
@@ -327,62 +287,22 @@ def main():
                 
                 st.dataframe(results_df, use_container_width=True)
                 
-                # Visualization
+                # Visualization using Streamlit native charts
                 st.subheader("Visualization")
                 
-                fig_bar = px.bar(
-                    results_df, 
-                    x='Criterion', 
-                    y='Weight',
-                    title='Criteria Weights',
-                    color='Weight',
-                    color_continuous_scale='viridis'
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                # Bar chart using Streamlit native
+                st.bar_chart(results_df.set_index('Criterion')['Weight'])
                 
-                # Pie chart
-                fig_pie = px.pie(
-                    results_df,
-                    values='Weight',
-                    names='Criterion',
-                    title='Weight Distribution'
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
-    
-    elif app_section == "Example Data":
-        st.header("📋 Example Data from Document")
-        
-        st.markdown("""
-        ### Table S7: Experts feedback in DFS scale for base scenario (S1)
-        
-        This table shows example pairwise comparisons using the DFS linguistic scale.
-        """)
-        
-        # Display the example table structure
-        example_data = {
-            'Comparison': ['RC1 vs RC2', 'RC1 vs RC3', 'RC1 vs RC4', 'RC1 vs RC5', 'RC1 vs RC6'],
-            'Optimistic Term': ['EEI', 'MI', 'StMI', 'VSI', 'WMI'],
-            'Pessimistic Term': ['EEU', 'MU', 'AMU', 'VSU', 'WMU'],
-            'Description': [
-                'Exactly Equal Importance / Exactly Equal Unimportance',
-                'More Important / More Unimportant', 
-                'Strongly More Important / Absolutely More Unimportant',
-                'Very Strongly More Important / Very Strongly More Unimportant',
-                'Weakly More Important / Weakly More Unimportant'
-            ]
-        }
-        
-        example_df = pd.DataFrame(example_data)
-        st.dataframe(example_df, use_container_width=True)
-        
-        st.markdown("""
-        ### Process Summary:
-        1. Experts provide pairwise comparisons using DFS linguistic terms
-        2. Linguistic terms are converted to DFS numerical values
-        3. DWGM operator aggregates individual judgments
-        4. Defuzzification converts DFS values to crisp weights
-        5. Consistency and score indices validate the results
-        """)
+                # Display as metric cards
+                st.subheader("Weight Distribution")
+                cols = st.columns(3)
+                for i, row in results_df.iterrows():
+                    with cols[i % 3]:
+                        st.metric(
+                            label=row['Criterion'],
+                            value=f"{row['Weight']:.3f}",
+                            delta=f"Rank: {row['Rank']}"
+                        )
 
 if __name__ == "__main__":
     main()
